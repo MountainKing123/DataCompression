@@ -1,0 +1,4 @@
+E:/GenericProjects/DataCompression/cmake-build-debug-visual-studio/CMakeFiles/DataCompression.dir
+E:/GenericProjects/DataCompression/cmake-build-debug-visual-studio/CMakeFiles/TestDebug.dir
+E:/GenericProjects/DataCompression/cmake-build-debug-visual-studio/CMakeFiles/ALL_BUILD.dir
+E:/GenericProjects/DataCompression/cmake-build-debug-visual-studio/CMakeFiles/ZERO_CHECK.dir

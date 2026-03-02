@@ -1,42 +1,77 @@
 ﻿#pragma once
-#include <vector>
 #include <cstdint>
+#include <vector>
+#include <cassert>
+#include <cstddef>
 
-class BitWriter
-{
+class BitWriter {
+    std::vector<uint8_t> buffer;
+    uint32_t bitBuffer = 0;
+    int bitsInBuffer = 0;
+    size_t totalBits = 0;
+
 public:
-    using Byte = uint8_t;
+    BitWriter() = default;
 
-    // Write `count` least-significant bits of `bits` to the stream.
-    // Example: write_bits(0b101, 3) will write three bits: 1,0,1
-    void write_bits(uint32_t bits, int count);
+    void writeBits(uint32_t bits, uint8_t count) {
+        assert(count <= 32);
+        bitBuffer = (bitBuffer << count) | (bits & ((1u << count) - 1));
+        bitsInBuffer += count;
+        totalBits += count;
 
-    // Flush any remaining bits to the output buffer (pad to 8 bits)
-    void flush();
+        while (bitsInBuffer >= 8) {
+            bitsInBuffer -= 8;
+            buffer.push_back(uint8_t(bitBuffer >> bitsInBuffer));
+            bitBuffer &= (1u << bitsInBuffer) - 1;
+        }
+    }
 
-    // Access the underlying byte buffer
-    const std::vector<Byte>& data() const { return data_; }
+    void flush() {
+        if (bitsInBuffer > 0) {
+            buffer.push_back(uint8_t(bitBuffer << (8 - bitsInBuffer)));
+            bitBuffer = 0;
+            bitsInBuffer = 0;
+        }
+    }
 
-private:
-    std::vector<Byte> data_; // Output buffer storing full bytes
-    uint64_t bit_buffer_ = 0; // Temporary buffer for bits before we have 8
-    int bit_count_ = 0; // Number of valid bits in bit_buffer_
+    const std::vector<uint8_t>& getBuffer() const { return buffer; }
+    size_t getTotalBits() const { return totalBits; }
 };
 
-// BitReader allows reading arbitrary bits from a byte-aligned buffer.
-class BitReader
-{
+class BitReader {
+    const uint8_t* data;
+    size_t byteCount;
+    size_t bytePos = 0;
+    uint32_t bitBuffer = 0;
+    int bitsInBuffer = 0;
+    size_t totalBits = 0;
+    size_t bitsRead = 0;
+
 public:
-    // Construct with pointer to data + size
-    BitReader(const uint8_t* data, size_t size);
+    BitReader(const uint8_t* d, size_t size, size_t totalBits_)
+        : data(d), byteCount(size), totalBits(totalBits_) {}
 
-    // Read `count` bits from the stream, returns them in the least significant bits of a uint32_t
-    uint32_t read_bits(int count);
+    uint32_t peekBits(uint8_t n) {
+        assert(n <= 32);
+        int bitsLeft = (int)(totalBits - bitsRead);
+        if (n > bitsLeft) n = bitsLeft;
 
-    const uint8_t* ptr_; // Current read pointer
-    const uint8_t* end_; // End of buffer
+        while (bitsInBuffer < n && bytePos < byteCount) {
+            bitBuffer = (bitBuffer << 8) | data[bytePos++];
+            bitsInBuffer += 8;
+        }
 
-private:
-    uint64_t bit_buffer_ = 0; // Temporary buffer storing bits before consuming
-    int bit_count_ = 0; // Number of valid bits in bit_buffer_
+        return (bitBuffer >> (bitsInBuffer - n)) & ((1u << n) - 1);
+    }
+
+    void consumeBits(uint8_t n) {
+        int bitsLeft = (int)(totalBits - bitsRead);
+        if (n > bitsLeft) n = bitsLeft;
+
+        bitsInBuffer -= n;
+        bitBuffer &= (1u << bitsInBuffer) - 1;
+        bitsRead += n;
+    }
+
+    size_t getTotalBitsRead() const { return bitsRead; }
 };

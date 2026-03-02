@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.1)
+cmake_minimum_required(VERSION 3.15)
 project(DataCompression)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -12,3 +12,12 @@ add_executable(DataCompression main.cpp
         bitstream.h
         huffman.cpp
         huffman.h)
+
+add_executable(TestDebug test_debug.cpp
+        compressor.cpp
+        compressor.h
+        bitstream.cpp
+        bitstream.h
+        huffman.cpp
+        huffman.h)
+

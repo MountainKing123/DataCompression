@@ -1,171 +1,242 @@
 ﻿#include "huffman.h"
-#include <functional>
+#include "bitstream.h"
+#include <cstring>
+#include <algorithm>
+#include <cassert>
 
-// Build code lengths
-std::array<uint8_t, SYMBOL_COUNT> Huffman::build_code_lengths(const std::array<uint32_t, SYMBOL_COUNT>& freq)
+void Huffman::buildFrequencies(const std::vector<uint8_t>& input,
+                               std::array<uint32_t, MaxSymbols>& freq)
+{
+    freq.fill(0);
+    for (uint8_t b : input)
+        freq[b]++;
+}
+
+void Huffman::buildCodeLengths(const std::array<uint32_t, MaxSymbols>& freq,
+                               std::array<uint8_t, MaxSymbols>& lengths)
 {
     struct Node {
-        uint32_t freq;
-        int symbol;
-        std::unique_ptr<Node> left;
-        std::unique_ptr<Node> right;
-        Node(uint32_t f, int s) : freq(f), symbol(s) {}
-        Node(std::unique_ptr<Node> l, std::unique_ptr<Node> r)
-            : freq(l->freq + r->freq), symbol(-1), left(std::move(l)), right(std::move(r)) {}
+        uint32_t frequency;
+        int16_t left;
+        int16_t right;
+        int16_t parent;
+        int16_t symbol;
     };
 
-    // Build initial nodes
-    std::vector<std::unique_ptr<Node>> heap;
-    for(int i=0;i<SYMBOL_COUNT;i++)
-        if(freq[i]>0)
-            heap.push_back(std::make_unique<Node>(freq[i], i));
-    if(heap.empty())
-        heap.push_back(std::make_unique<Node>(1,0));
+    std::array<Node, MaxSymbols * 2> nodes{};
+    int16_t nodeCount = 0;
+    std::array<int16_t, MaxSymbols> active{};
+    int16_t activeCount = 0;
+    lengths.fill(0);
 
-    auto cmp = [](const std::unique_ptr<Node>& a, const std::unique_ptr<Node>& b){
-        return a->freq > b->freq;
-    };
+    // Initialize leaves
+    for (int16_t i = 0; i < MaxSymbols; ++i)
+    {
+        if (freq[i] > 0)
+        {
+            nodes[nodeCount] = { freq[i], -1, -1, -1, i };
+            active[activeCount++] = nodeCount++;
+        }
+    }
 
-    std::ranges::make_heap(heap, cmp);
+    if (activeCount == 0) return;
+    if (activeCount == 1) { lengths[nodes[active[0]].symbol] = 1; return; }
 
     // Build Huffman tree
-    while(heap.size() > 1){
-        std::ranges::pop_heap(heap, cmp);
-        auto a = std::move(heap.back()); heap.pop_back();
+    while (activeCount > 1)
+    {
+        std::sort(active.begin(), active.begin() + activeCount,
+                  [&](int16_t a, int16_t b) { return nodes[a].frequency < nodes[b].frequency; });
 
-        std::ranges::pop_heap(heap, cmp);
-        auto b = std::move(heap.back()); heap.pop_back();
+        int16_t a = active[0];
+        int16_t b = active[1];
 
-        heap.push_back(std::make_unique<Node>(std::move(a), std::move(b)));
-        std::ranges::push_heap(heap, cmp);
+        nodes[nodeCount] = {
+            nodes[a].frequency + nodes[b].frequency,
+            a,
+            b,
+            -1,
+            -1
+        };
+
+        nodes[a].parent = nodes[b].parent = nodeCount;
+
+        // Update active list
+        active[0] = active[activeCount - 1];
+        active[1] = nodeCount;
+        activeCount--;
+        nodeCount++;
     }
 
-    Node* root = heap.front().get();
-    std::array<uint8_t, SYMBOL_COUNT> code_lengths{};
-
-    std::function<void(Node*, uint8_t)> traverse = [&](const Node* node, const uint8_t depth){
-        if(!node) return;
-        if(node->symbol >= 0)
-            code_lengths[node->symbol] = depth;
-        traverse(node->left.get(), depth+1);
-        traverse(node->right.get(), depth+1);
-    };
-    traverse(root, 0);
-
-    return code_lengths;
+    // Assign code lengths
+    for (int16_t i = 0; i < nodeCount; ++i)
+    {
+        if (nodes[i].symbol >= 0)
+        {
+            int depth = 0;
+            int16_t current = i;
+            while (nodes[current].parent != -1) { depth++; current = nodes[current].parent; }
+            if (depth > MaxCodeLength) depth = MaxCodeLength;
+            lengths[nodes[i].symbol] = static_cast<uint8_t>(depth);
+        }
+    }
 }
 
-// Build canonical codes
-std::array<HuffmanCode, SYMBOL_COUNT> Huffman::build_canonical_codes(const std::array<uint8_t, SYMBOL_COUNT>& lengths)
+void Huffman::buildCanonicalCodes(const std::array<uint8_t, MaxSymbols>& lengths,
+                                  std::array<HuffmanCode, MaxSymbols>& codes)
 {
-    std::array<HuffmanCode, SYMBOL_COUNT> table{};
-    std::vector<std::pair<uint8_t,int>> symbols;
+    codes.fill({0,0});
+    std::array<int, MaxCodeLength + 1> blCount{};
+    for (int i = 0; i < MaxSymbols; ++i) if (lengths[i]) blCount[lengths[i]]++;
 
-    for(int i=0;i<SYMBOL_COUNT;i++)
-        if(lengths[i]>0)
-            symbols.emplace_back(lengths[i], i);
-
-    std::ranges::sort(symbols);
-
+    std::array<uint16_t, MaxCodeLength + 1> nextCode{};
     uint16_t code = 0;
-    uint8_t prev_len = 0;
-    for(auto [len, sym] : symbols){
-        code <<= len - prev_len;
-        table[sym].code = code;
-        table[sym].length = len;
-        code++;
-        prev_len = len;
+    for (int bits = 1; bits <= MaxCodeLength; ++bits)
+    {
+        code = (code + blCount[bits-1]) << 1;
+        nextCode[bits] = code;
     }
 
-    return table;
+    for (int i = 0; i < MaxSymbols; ++i)
+    {
+        uint8_t len = lengths[i];
+        if (len)
+        {
+            codes[i] = { nextCode[len], len };
+            nextCode[len]++;
+        }
+    }
 }
 
-//////////////////////////
-// Build fast decode table
-//////////////////////////
-std::vector<DecodeEntry> Huffman::build_decode_table(const std::array<HuffmanCode, SYMBOL_COUNT>& table, const int max_len)
+void Huffman::buildDecodeTable(const std::array<HuffmanCode, MaxSymbols>& codes,
+                               std::array<int16_t, DecodeTableSize>& table)
 {
-    const size_t size = 1ull << max_len;
-    std::vector<DecodeEntry> decode_table(size);
+    table.fill(-1);
 
-    for(int sym=0;sym<SYMBOL_COUNT;sym++){
-        const auto& hc = table[sym];
-        if(hc.length==0) continue;
+    for (int symbol = 0; symbol < MaxSymbols; ++symbol)
+    {
+        const HuffmanCode& c = codes[symbol];
+        if (!c.length) continue;
 
-        const int shift = max_len - hc.length;
-        const uint32_t start = hc.code << shift;
-        const uint32_t end = start + (1u<<shift);
-        for(uint32_t i=start;i<end;i++)
-            decode_table[i] = {static_cast<uint8_t>(sym), hc.length};
+        // replicate code into all entries for lookup
+        int shift = MaxCodeLength - c.length;
+        int start = c.bits << shift;
+        int end = (c.bits + 1) << shift;
+
+        for (int i = start; i < end; ++i)
+            table[i] = symbol;
     }
-
-    return decode_table;
 }
 
-//////////////////////////
-// Compress
-//////////////////////////
+// ----------------------------
+// Compress / Decompress
+// ----------------------------
+
 std::vector<uint8_t> Huffman::compress(const std::vector<uint8_t>& input)
 {
-    std::array<uint32_t, SYMBOL_COUNT> freq{};
-    for(const auto b: input) freq[b]++;
-
-    const auto code_lengths = build_code_lengths(freq);
-    const auto table = build_canonical_codes(code_lengths);
+    std::array<uint32_t, MaxSymbols> freq{};
+    std::array<uint8_t, MaxSymbols> lengths{};
+    std::array<HuffmanCode, MaxSymbols> codes{};
+    buildFrequencies(input, freq);
+    buildCodeLengths(freq, lengths);
+    buildCanonicalCodes(lengths, codes);
 
     BitWriter writer;
 
-    // Header: write 1 byte per symbol code length
-    for(int i=0;i<SYMBOL_COUNT;i++)
-        writer.write_bits(code_lengths[i], 8);
+    // Header: code lengths
+    for (uint8_t l : lengths) writer.writeBits(l, 8);
 
-    // Encode symbols
-    for(const auto b: input){
-        const auto& hc = table[b];
-        writer.write_bits(hc.code, hc.length);
+    // Original size (big endian)
+    uint32_t size = static_cast<uint32_t>(input.size());
+    writer.writeBits((size >> 24) & 0xFF, 8);
+    writer.writeBits((size >> 16) & 0xFF, 8);
+    writer.writeBits((size >> 8) & 0xFF, 8);
+    writer.writeBits(size & 0xFF, 8);
+
+    for (uint8_t b : input)
+    {
+        const HuffmanCode& c = codes[b];
+        writer.writeBits(c.bits, c.length);
     }
 
+    // Store total bits written (before padding)
+    size_t totalBits = writer.getTotalBits();
     writer.flush();
-    return writer.data();
+
+    // Append total bits as 4 bytes at the end (big endian)
+    auto& buffer = const_cast<std::vector<uint8_t>&>(writer.getBuffer());
+    buffer.push_back(static_cast<uint8_t>((totalBits >> 24) & 0xFF));
+    buffer.push_back(static_cast<uint8_t>((totalBits >> 16) & 0xFF));
+    buffer.push_back(static_cast<uint8_t>((totalBits >> 8) & 0xFF));
+    buffer.push_back(static_cast<uint8_t>(totalBits & 0xFF));
+
+    return buffer;
 }
 
-//////////////////////////
-// Decompress
-//////////////////////////
 std::vector<uint8_t> Huffman::decompress(const std::vector<uint8_t>& input)
 {
-    BitReader reader(input.data(), input.size());
+    std::array<HuffmanCode, MaxSymbols> codes{};
+    std::array<uint8_t, MaxSymbols> lengths{};
+    std::array<int16_t, DecodeTableSize> decodeTable{};
 
-    std::array<uint8_t, SYMBOL_COUNT> code_lengths{};
-    for(int i=0;i<SYMBOL_COUNT;i++)
-        code_lengths[i] = static_cast<uint8_t>(reader.read_bits(8));
+    // Read total bits from the last 4 bytes
+    if (input.size() < 4) return std::vector<uint8_t>();
 
-    auto table = build_canonical_codes(code_lengths);
+    size_t totalBits = 0;
+    totalBits |= (static_cast<size_t>(input[input.size() - 4]) << 24);
+    totalBits |= (static_cast<size_t>(input[input.size() - 3]) << 16);
+    totalBits |= (static_cast<size_t>(input[input.size() - 2]) << 8);
+    totalBits |= (static_cast<size_t>(input[input.size() - 1]));
 
-    int max_len=0;
-    for(const auto l: code_lengths) if(l>max_len) max_len=l;
+    // Create reader with data excluding the last 4 bytes
+    BitReader reader(input.data(), input.size() - 4, totalBits);
 
-    const auto decode_table = build_decode_table(table, max_len);
+    // Read header
+    for (int i = 0; i < MaxSymbols; ++i)
+        lengths[i] = static_cast<uint8_t>(reader.peekBits(8)), reader.consumeBits(8);
+
+    buildCanonicalCodes(lengths, codes);
+    buildDecodeTable(codes, decodeTable);
+
+    // Read original size
+    uint32_t size = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        uint8_t byte = static_cast<uint8_t>(reader.peekBits(8));
+        size = (size << 8) | byte;
+        reader.consumeBits(8);
+    }
 
     std::vector<uint8_t> output;
-    uint64_t bit_buffer = 0;
-    int bit_count = 0;
+    output.reserve(size);
 
-    while(true){
-        while(bit_count < max_len){
-            if(reader.ptr_ >= reader.end_) break;
-            bit_buffer |= static_cast<uint64_t>(*reader.ptr_++) << bit_count;
-            bit_count += 8;
+    while (output.size() < size)
+    {
+        // Check how many valid bits we have left
+        int bitsLeft = static_cast<int>(totalBits) - static_cast<int>(reader.getTotalBitsRead());
+        if (bitsLeft <= 0) break;
+
+        // Only peek as many bits as we actually have (don't peek padding)
+        // Clamp to a reasonable max for decoding (most codes are much shorter than MaxCodeLength)
+        int bitsToLookup = std::min(bitsLeft, MaxCodeLength);
+
+        int code = reader.peekBits(bitsToLookup);
+
+        // Shift the code to align it as if we peeked MaxCodeLength bits
+        // This is necessary because the decode table expects MaxCodeLength-bit aligned codes
+        if (bitsToLookup < MaxCodeLength) {
+            code <<= (MaxCodeLength - bitsToLookup);
         }
-        if(bit_count==0) break;
 
-        const auto idx = static_cast<uint32_t>(bit_buffer & (1u<<max_len)-1);
-        const auto entry = decode_table[idx];
+        int symbol = decodeTable[code];
 
-        output.push_back(entry.symbol);
+        if (symbol < 0 || symbol >= MaxSymbols) {
+            // Invalid symbol
+            break;
+        }
 
-        bit_buffer >>= entry.length;
-        bit_count -= entry.length;
+        output.push_back(static_cast<uint8_t>(symbol));
+        reader.consumeBits(codes[symbol].length);
     }
 
     return output;
