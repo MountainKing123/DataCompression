@@ -1,5 +1,23 @@
+# Project Specific
+docs/
+build/
+build_log.txt
+
+# CMake
+cmake-build-*/
+
 # JetBrains IDEs
 .idea/
+.clion-config.yaml
+
+# Visual Studio
+.vs/
+
+# VS Code
+.vscode/
+
+# Qt Creator
+*.user
 
 # Prerequisites
 *.d
