@@ -1,4 +1,5 @@
 ﻿#include "compressor.h"
+#include "../bench_tracker.h"
 #include <iostream>
 #include <vector>
 #include <chrono>
@@ -10,23 +11,13 @@
 #include <cassert>
 #include <numeric>
 
-struct BenchResult
+static BenchmarkResult runBench(const std::string& name,
+                                const std::vector<uint8_t>& input,
+                                int iterations = 5)
 {
-    std::string name;
-    size_t inputSize = 0;
-    size_t compressedSize = 0;
-    double compressMs = 0;
-    double decompressMs = 0;
-    bool roundtrip = false;
-};
-
-static BenchResult runBench(const std::string& name,
-                            const std::vector<uint8_t>& input,
-                            int iterations = 5)
-{
-    BenchResult r;
+    BenchmarkResult r;
     r.name = name;
-    r.inputSize = input.size();
+    r.uncompressedSize = input.size();
 
     compression::CompressOptions opts;
 
@@ -43,7 +34,7 @@ static BenchResult runBench(const std::string& name,
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (ms < bestCompress) bestCompress = ms;
     }
-    r.compressMs = bestCompress;
+    r.compressionTime_ms = bestCompress;
     r.compressedSize = compressed.size();
 
     // Benchmark decompress
@@ -57,7 +48,7 @@ static BenchResult runBench(const std::string& name,
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (ms < bestDecompress) bestDecompress = ms;
     }
-    r.decompressMs = bestDecompress;
+    r.decompressionTime_ms = bestDecompress;
     r.roundtrip = (output == input);
 
     return r;
@@ -167,29 +158,28 @@ int main()
     std::cout << std::string(144, '-') << "\n";
 
     bool allPass = true;
+    std::vector<BenchmarkResult> results;
 
     for (size_t gi = 0; gi < 4; ++gi)
     {
         for (size_t si = 0; si < 5; ++si)
         {
             auto data = generators[gi].fn(sizes[si]);
-            auto r = runBench(generators[gi].name, data, iters[si]);
+            std::string name = std::string(generators[gi].name) + " " + sizeLabels[si];
+            auto r = runBench(name, data, iters[si]);
+            results.push_back(r);
 
-            double ratio = static_cast<double>(r.inputSize) / static_cast<double>(r.compressedSize);
-            double cMBs = (static_cast<double>(r.inputSize) / (1024.0 * 1024.0)) / (r.compressMs / 1000.0);
-            double dMBs = (static_cast<double>(r.inputSize) / (1024.0 * 1024.0)) / (r.decompressMs / 1000.0);
-
-            std::string dataTypeLabel = std::string(generators[gi].name) + " " + sizeLabels[si];
+            std::string dataTypeLabel = name;
 
             std::cout << std::left << std::setw(32) << dataTypeLabel
                       << std::right << std::fixed
-                      << std::setw(14) << formatSize(r.inputSize)
+                      << std::setw(14) << formatSize(r.uncompressedSize)
                       << std::setw(14) << formatSize(r.compressedSize)
-                      << std::setprecision(2) << std::setw(10) << ratio << ":1"
-                      << std::setprecision(2) << std::setw(12) << r.compressMs
-                      << std::setprecision(2) << std::setw(12) << r.decompressMs
-                      << std::setprecision(1) << std::setw(12) << cMBs
-                      << std::setprecision(1) << std::setw(12) << dMBs
+                      << std::setprecision(2) << std::setw(10) << r.getRatio() << ":1"
+                      << std::setprecision(2) << std::setw(12) << r.compressionTime_ms
+                      << std::setprecision(2) << std::setw(12) << r.decompressionTime_ms
+                      << std::setprecision(1) << std::setw(12) << r.getCompressSpeed_MB_s()
+                      << std::setprecision(1) << std::setw(12) << r.getDecompressSpeed_MB_s()
                       << "  " << (r.roundtrip ? "PASS" : "FAIL")
                       << "\n";
 
@@ -197,6 +187,35 @@ int main()
             assert(r.roundtrip);
         }
     }
+
+    // Save current results to benchmark_results directory
+    BenchmarkTracker tracker;
+
+    // Try multiple possible paths for benchmark results directory
+    std::string benchDir = "benchmark_results";
+    std::string currentFile = benchDir + "/current.csv";
+    std::string baselineFile = benchDir + "/baseline.csv";
+    std::string deltaFile = benchDir + "/delta_report.txt";
+
+    tracker.saveResults(currentFile, results);
+    std::cout << "\nBenchmark results saved to " << currentFile << "\n";
+
+    // Try to load previous baseline and show delta
+    auto previous = tracker.loadResults(baselineFile);
+    if (!previous.empty())
+    {
+        tracker.printDeltaReport(results, previous);
+        tracker.saveDeltaReport(deltaFile, results, previous);
+        std::cout << "Delta report saved to " << deltaFile << "\n";
+    }
+    else
+    {
+        std::cout << "No baseline found (" << baselineFile << ").\n";
+        std::cout << "To create baseline from current results:\n";
+        std::cout << "  cd benchmark_results && copy current.csv baseline.csv\n";
+    }
+
+    tracker.printSummary(results);
 
     std::cout << "\n=== " << (allPass ? "All benchmarks passed!" : "FAILURES DETECTED") << " ===\n";
 
