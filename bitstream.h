@@ -4,6 +4,13 @@
 #include <cassert>
 #include <cstddef>
 
+namespace {
+inline uint32_t bitMask32(uint8_t count)
+{
+    return (count >= 32) ? 0xFFFFFFFFu : ((1u << count) - 1u);
+}
+}
+
 class BitWriter {
     std::vector<uint8_t> buffer;
     uint32_t bitBuffer = 0;
@@ -15,14 +22,14 @@ public:
 
     void writeBits(uint32_t bits, uint8_t count) {
         assert(count <= 32);
-        bitBuffer = (bitBuffer << count) | (bits & ((1u << count) - 1));
+        bitBuffer = (bitBuffer << count) | (bits & bitMask32(count));
         bitsInBuffer += count;
         totalBits += count;
 
         while (bitsInBuffer >= 8) {
             bitsInBuffer -= 8;
             buffer.push_back(uint8_t(bitBuffer >> bitsInBuffer));
-            bitBuffer &= (1u << bitsInBuffer) - 1;
+            bitBuffer &= bitMask32(static_cast<uint8_t>(bitsInBuffer));
         }
     }
 
@@ -53,23 +60,27 @@ public:
 
     uint32_t peekBits(uint8_t n) {
         assert(n <= 32);
-        int bitsLeft = (int)(totalBits - bitsRead);
-        if (n > bitsLeft) n = bitsLeft;
 
-        while (bitsInBuffer < n && bytePos < byteCount) {
-            bitBuffer = (bitBuffer << 8) | data[bytePos++];
+        // Keep fixed-width peek semantics by zero-padding if the source is exhausted.
+        while (bitsInBuffer < n) {
+            uint8_t next = (bytePos < byteCount) ? data[bytePos++] : 0;
+            bitBuffer = (bitBuffer << 8) | next;
             bitsInBuffer += 8;
         }
 
-        return (bitBuffer >> (bitsInBuffer - n)) & ((1u << n) - 1);
+        return (bitBuffer >> (bitsInBuffer - n)) & bitMask32(n);
     }
 
     void consumeBits(uint8_t n) {
-        int bitsLeft = (int)(totalBits - bitsRead);
-        if (n > bitsLeft) n = bitsLeft;
+        assert(n <= 32);
+        while (bitsInBuffer < n) {
+            uint8_t next = (bytePos < byteCount) ? data[bytePos++] : 0;
+            bitBuffer = (bitBuffer << 8) | next;
+            bitsInBuffer += 8;
+        }
 
         bitsInBuffer -= n;
-        bitBuffer &= (1u << bitsInBuffer) - 1;
+        bitBuffer &= bitMask32(static_cast<uint8_t>(bitsInBuffer));
         bitsRead += n;
     }
 
