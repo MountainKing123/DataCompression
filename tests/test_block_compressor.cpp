@@ -1,4 +1,4 @@
-﻿#include "compressor.h"
+#include "compressor.h"
 #include <iostream>
 #include <vector>
 #include <random>
@@ -143,3 +143,4 @@ int main()
     std::cout << "=== All compressor API tests passed! ===\n";
     return 0;
 }
+

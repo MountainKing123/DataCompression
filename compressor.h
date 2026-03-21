@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <vector>
 #include <cstdint>
 
@@ -15,6 +15,8 @@ namespace compression
         uint32_t maxMatchLength = 65535;
         uint32_t maxDistance    = 131072;
 
+        bool useInterleaved = true;      // 3-stream interleaved Huffman decode
+        bool useRLE = true;              // Try RLE pre-pass before Huffman
         size_t numThreads = 0;           // 0 = auto-detect
     };
 
@@ -28,3 +30,4 @@ namespace compression
     std::vector<Byte> decompress(const std::vector<Byte>& compressed);
 
 } // namespace compression
+

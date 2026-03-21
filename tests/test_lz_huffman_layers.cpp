@@ -1,4 +1,4 @@
-﻿#include "lz77.h"
+#include "lz.h"
 #include "huffman.h"
 #include <iostream>
 #include <vector>
@@ -26,8 +26,8 @@ int main()
 
         // Step 1: LZ77 encoding
         auto t0 = std::chrono::high_resolution_clock::now();
-        LZ77::CompressOptions lz77_opts;
-        auto lz77_stream = LZ77::encodeChunk(input, lz77_opts);
+        LZ::CompressOptions lz77_opts;
+        auto lz77_stream = LZ::encodeChunk(input, lz77_opts);
         auto t1 = std::chrono::high_resolution_clock::now();
         double lz77_time = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -38,7 +38,7 @@ int main()
         uint32_t total_match_bytes = 0;
         for (const auto& sym : lz77_stream.symbols)
         {
-            if (sym.type == LZ77::EncodedSymbol::Literal) literals++;
+            if (sym.type == LZ::EncodedSymbol::Literal) literals++;
             else
             {
                 matches++;
@@ -50,7 +50,7 @@ int main()
         std::cout << "    Time: " << std::fixed << std::setprecision(3) << lz77_time << " ms\n";
 
         // Step 2: Verify LZ77 roundtrip
-        auto decoded = LZ77::decodeStream(lz77_stream);
+        auto decoded = LZ::decodeStream(lz77_stream);
         assert(input == decoded && "LZ77 decode failed");
 
         // Step 3: Now test full pipeline with Huffman
@@ -76,12 +76,12 @@ int main()
             b = static_cast<uint8_t>(dist(rng));
         }
 
-        auto lz77_stream = LZ77::encodeChunk(input, LZ77::CompressOptions{});
+        auto lz77_stream = LZ::encodeChunk(input, LZ::CompressOptions{});
 
         size_t literals = 0, matches = 0;
         for (const auto& sym : lz77_stream.symbols)
         {
-            if (sym.type == LZ77::EncodedSymbol::Literal) literals++;
+            if (sym.type == LZ::EncodedSymbol::Literal) literals++;
             else matches++;
         }
 
@@ -109,13 +109,13 @@ int main()
             input.insert(input.end(), pattern.begin(), pattern.end());
         }
 
-        auto lz77_stream = LZ77::encodeChunk(input, LZ77::CompressOptions{});
+        auto lz77_stream = LZ::encodeChunk(input, LZ::CompressOptions{});
 
         size_t literals = 0, matches = 0;
         uint32_t total_match_bytes = 0;
         for (const auto& sym : lz77_stream.symbols)
         {
-            if (sym.type == LZ77::EncodedSymbol::Literal) literals++;
+            if (sym.type == LZ::EncodedSymbol::Literal) literals++;
             else
             {
                 matches++;
@@ -139,4 +139,5 @@ int main()
     std::cout << "=== All integration tests passed! ===\n";
     return 0;
 }
+
 

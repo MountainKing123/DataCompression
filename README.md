@@ -1,25 +1,25 @@
-﻿# Data Compression - LZ77 + Huffman Token-Based Codec
+﻿# Data Compression - LZ + Huffman Token-Based Codec
 
-A C++ implementation of LZ77 compression combined with Huffman entropy coding. Uses token-based encoding with per-stream Huffman tables, log2-class distance/length encoding, and a 3-slot recent-offsets cache. Chunk-based processing enables parallel decompression.
+A C++ implementation of LZ compression combined with Huffman entropy coding. Uses token-based encoding with per-stream Huffman tables, log2-class distance/length encoding, and a 3-slot recent-offsets cache. Chunk-based processing enables parallel decompression.
 
 ## Architecture
 
-The codec processes data in 128 KiB chunks. Each chunk is independently compressed through a multi-stage pipeline:
+The codec processes data in 128 KiB independent chunks. Each chunk is compressed through a multi-stage pipeline:
 
-1. **LZ77 Match Finding** - Hash-chain match search with 3-slot recent-offsets cache
+1. **LZ Match Finding** - Hash-chain match search with 3-slot recent-offsets cache
 2. **Token Packing** - Literal runs and matches encoded as token bytes (litlen + matchlen + offset mode)
-3. **Stream Separation** - Token, literal, distance-class, length-class, extra-bits, and overflow streams
+3. **Stream Separation** - Token, literal, packed-distance, overflow, and extra-bits streams
 4. **Per-Stream Huffman** - Each stream gets independent entropy tables with raw fallback
 5. **Wire Serialization** - LZH4 format with sparse/dense code-length headers
 
 Token byte layout:
 ```
-Bits 0-1: literal run length (0-2 inline; 3 = overflow varint)
-Bits 2-5: match length field (0-14 = length 3-17; 15 = overflow via length class)
+Bits 0-1: literal run length (0-2 inline; 3 = escape to lrl8 stream)
+Bits 2-5: match length field (0-14 = length 3-17; 15 = escape to lrl8 stream)
 Bits 6-7: offset mode (0 = new distance; 1/2/3 = recent offset 0/1/2)
 ```
 
-Distances use DEFLATE-style log2 classes (36 classes covering 1-262144). Extra bits for distance/length values are stored in a separate raw bitstream, bypassing Huffman.
+Distances use packed offset encoding: one entropy-coded byte absorbs the log2 class and 4 bits of mantissa. Extra bits for distances/lengths are stored in a separate raw bitstream, bypassing Huffman. Overflow values (litlen >= 3, matchlen >= 18) are encoded in a shared lrl8 byte stream, with escape values 255 signaling LE32 overflow into a separate stream.
 
 ## Files
 
@@ -27,8 +27,8 @@ Distances use DEFLATE-style log2 classes (36 classes covering 1-262144). Extra b
 | File | Purpose |
 |------|---------|
 | `huffman.h/cpp` | Huffman codec: frequency analysis, canonical codes, two-level decode tables |
-| `lz77.h/cpp` | LZ77 encoder with hash-chain match finding and 3-slot recent-offsets cache |
-| `lz77_huffman.h/cpp` | Token-based stream separation, per-stream Huffman, log2-class encoding |
+| `lz.h/cpp` | LZ encoder with hash-chain match finding and 3-slot recent-offsets cache |
+| `lz_huffman.h/cpp` | Token-based stream separation, per-stream Huffman, log2-class encoding |
 | `bitstream.h/cpp` | Bit-level reading/writing primitives |
 | `compressor.h/cpp` | High-level block compression API (LZH4 wire format) |
 
@@ -37,9 +37,9 @@ Distances use DEFLATE-style log2 classes (36 classes covering 1-262144). Extra b
 |------|---------|
 | `tests/test_benchmark.cpp` | Performance benchmarking across data patterns and sizes |
 | `tests/test_block_compressor.cpp` | Block compression API roundtrip tests |
-| `tests/test_lz77_huffman_multistream.cpp` | Token-based multi-stream tests (overflow, recent offsets, edge cases) |
-| `tests/test_lz77_huffman_layers.cpp` | LZ77 and Huffman as separate layers |
-| `tests/test_lz77.cpp` | LZ77-only encoding validation |
+| `tests/test_lz_huffman_multistream.cpp` | Token-based multi-stream tests (overflow, recent offsets, edge cases) |
+| `tests/test_lz_huffman_layers.cpp` | LZ and Huffman as separate layers |
+| `tests/test_lz.cpp` | LZ-only encoding validation |
 | `tests/test_huffman_metrics.cpp` | Huffman entropy analysis and metrics across data patterns |
 | `tests/test_huffman_edge_cases.cpp` | Huffman edge cases (single byte, uniform, alternating, sequential) |
 | `tests/test_huffman_parallel.cpp` | Huffman parallel frequency counting |
@@ -64,7 +64,7 @@ cmake --build . --config Release
 ## Benchmark Results (Release Build)
 
 ```
-=== LZ77+Huffman Multi-Stream Benchmark ===
+=== LZ+Huffman Multi-Stream Benchmark ===
 
 Data Type                         Uncompressed    Compressed     Ratio      Enc ms      Dec ms    Enc MB/s    Dec MB/s  OK
 ------------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,29 +1,9 @@
-﻿#include "compressor.h"
-#include "lz77_huffman.h"
-#include <cstring>
-
-// Wire format (v4 - LZH4):
-//   [4] magic "LZH4"
-//   [4] total uncompressed size (LE32)
-//   [4] chunk count (LE32)
-//   For each chunk:
-//     [4] uncompressed size (LE32)
-//     [4] tokenCount (LE32)
-//     [4] literalByteCount (LE32)
-//     [4] distClassCount (LE32)
-//     [4] lenClassCount (LE32)
-//     [4] extraBitCount (LE32)
-//     [4] overflowCount (LE32)
-//     Per stream (token, literal, distClass, lenClass):
-//       StreamHeader (type + optional code lengths + data)
-//     [4] extraBits stream size (LE32)
-//     [extraBits bytes]
-//     [4] overflow stream size (LE32)
-//     [overflow bytes]
+#include "compressor.h"
+#include "lz_huffman.h"
 
 namespace
 {
-    void writeLE32(std::vector<uint8_t>& out, uint32_t v)
+    void writeLE32(std::vector<uint8_t>& out, const uint32_t v)
     {
         out.push_back(static_cast<uint8_t>(v));
         out.push_back(static_cast<uint8_t>(v >> 8));
@@ -40,12 +20,15 @@ namespace
     }
 
     void writeStreamHeader(std::vector<uint8_t>& out,
-                           const LZ77Huffman::StreamHeader& header,
+                           const LZHuffman::StreamHeader& header,
                            const std::vector<uint8_t>& streamData)
     {
-        out.push_back(static_cast<uint8_t>(header.type));
+        auto typeAndFlags = static_cast<uint8_t>(header.type);
+        if (header.interleaved) typeAndFlags |= 0x80;
+        out.push_back(typeAndFlags);
 
-        if (header.type == LZ77Huffman::StreamType::Huffman)
+        if (header.type == LZHuffman::StreamType::Huffman ||
+            header.type == LZHuffman::StreamType::RLEHuffman)
         {
             int usedSymbols = 0;
             for (uint8_t len : header.codeLengths)
@@ -73,21 +56,28 @@ namespace
                 out.push_back(0);
                 out.insert(out.end(), header.codeLengths.begin(), header.codeLengths.end());
             }
+
+            if (header.type == LZHuffman::StreamType::RLEHuffman)
+                writeLE32(out, header.rleEncodedSize);
         }
 
         writeLE32(out, static_cast<uint32_t>(streamData.size()));
         out.insert(out.end(), streamData.begin(), streamData.end());
     }
 
-    bool readStreamHeader(const uint8_t* p, size_t totalSize, size_t& pos,
-                          LZ77Huffman::StreamHeader& header,
+    bool readStreamHeader(const uint8_t* p, const size_t totalSize, size_t& pos,
+                          LZHuffman::StreamHeader& header,
                           std::vector<uint8_t>& streamData)
     {
         if (pos >= totalSize) return false;
-        header.type = static_cast<LZ77Huffman::StreamType>(p[pos++]);
+        uint8_t typeAndFlags = p[pos++];
+        header.interleaved = (typeAndFlags & 0x80) != 0;  // Bit 7 = interleaved flag
+        header.type = static_cast<LZHuffman::StreamType>(typeAndFlags & 0x0F);
 
         header.codeLengths.fill(0);
-        if (header.type == LZ77Huffman::StreamType::Huffman)
+        header.rleEncodedSize = 0;
+        if (header.type == LZHuffman::StreamType::Huffman ||
+            header.type == LZHuffman::StreamType::RLEHuffman)
         {
             if (pos >= totalSize) return false;
             uint8_t codeLengthMode = p[pos++];
@@ -110,6 +100,12 @@ namespace
                     header.codeLengths[symbol] = length;
                 }
             }
+
+            if (header.type == LZHuffman::StreamType::RLEHuffman)
+            {
+                if (pos + 4 > totalSize) return false;
+                header.rleEncodedSize = readLE32(p + pos); pos += 4;
+            }
         }
 
         if (pos + 4 > totalSize) return false;
@@ -120,7 +116,7 @@ namespace
         return true;
     }
 
-    bool readRawStream(const uint8_t* p, size_t totalSize, size_t& pos,
+    bool readRawStream(const uint8_t* p, const size_t totalSize, size_t& pos,
                        std::vector<uint8_t>& streamData)
     {
         if (pos + 4 > totalSize) return false;
@@ -138,28 +134,30 @@ namespace compression
 std::vector<Byte> compress(const std::vector<Byte>& input,
                            const CompressOptions& opts)
 {
-    LZ77Huffman::CompressOptions chunkOpts;
+    LZHuffman::CompressOptions chunkOpts;
     chunkOpts.minMatchLength = opts.minMatchLength;
     chunkOpts.maxMatchLength = opts.maxMatchLength;
     chunkOpts.maxDistance     = opts.maxDistance;
+    chunkOpts.useInterleaved = opts.useInterleaved;
+    chunkOpts.useRLE         = opts.useRLE;
 
-    std::vector<LZ77Huffman::CompressedChunk> chunks;
+    std::vector<LZHuffman::CompressedChunk> chunks;
     for (size_t off = 0; off < input.size(); off += opts.chunkSize)
     {
-        size_t len = std::min(opts.chunkSize, input.size() - off);
+        const size_t len = std::min(opts.chunkSize, input.size() - off);
         std::vector<uint8_t> chunkData(input.begin() + static_cast<ptrdiff_t>(off),
                                        input.begin() + static_cast<ptrdiff_t>(off + len));
-        chunks.push_back(LZ77Huffman::compressChunk(chunkData, chunkOpts));
+        chunks.push_back(LZHuffman::compressChunk(chunkData, chunkOpts));
     }
 
     if (chunks.empty())
-        chunks.push_back(LZ77Huffman::compressChunk({}, chunkOpts));
+        chunks.push_back(LZHuffman::compressChunk({}, chunkOpts));
 
     std::vector<Byte> out;
     out.reserve(input.size());
 
     out.push_back('L'); out.push_back('Z');
-    out.push_back('H'); out.push_back('4');
+    out.push_back('H'); out.push_back('8');
     writeLE32(out, static_cast<uint32_t>(input.size()));
     writeLE32(out, static_cast<uint32_t>(chunks.size()));
 
@@ -168,21 +166,28 @@ std::vector<Byte> compress(const std::vector<Byte>& input,
         writeLE32(out, c.uncompressedSize);
         writeLE32(out, c.tokenCount);
         writeLE32(out, c.literalByteCount);
-        writeLE32(out, c.distClassCount);
-        writeLE32(out, c.lenClassCount);
+        writeLE32(out, c.distPackedCount);
+        writeLE32(out, c.lrl8Count);
         writeLE32(out, c.extraBitCount);
-        writeLE32(out, c.overflowCount);
+        writeLE32(out, c.lrl8ExtraCount);
+
+        uint8_t flags = 0;
+        if (c.literalSubMode) flags |= 0x01;
+        out.push_back(flags);
 
         writeStreamHeader(out, c.tokenHeader, c.tokenStream);
         writeStreamHeader(out, c.literalHeader, c.literalStream);
-        writeStreamHeader(out, c.distClassHeader, c.distClassStream);
-        writeStreamHeader(out, c.lenClassHeader, c.lenClassStream);
+        writeStreamHeader(out, c.distPackedHeader, c.distPackedStream);
+        writeStreamHeader(out, c.lrl8Header, c.lrl8Stream);
 
-        writeLE32(out, static_cast<uint32_t>(c.extraBitsStream.size()));
+        // Extra bits: encode mode in top 2 bits of size field
+        const auto extraSize = static_cast<uint32_t>(c.extraBitsStream.size());
+        const uint32_t packedSize = extraSize | (static_cast<uint32_t>(c.extraBitsMode) << 30);
+        writeLE32(out, packedSize);
         out.insert(out.end(), c.extraBitsStream.begin(), c.extraBitsStream.end());
 
-        writeLE32(out, static_cast<uint32_t>(c.overflowStream.size()));
-        out.insert(out.end(), c.overflowStream.begin(), c.overflowStream.end());
+        writeLE32(out, static_cast<uint32_t>(c.lrl8ExtraStream.size()));
+        out.insert(out.end(), c.lrl8ExtraStream.begin(), c.lrl8ExtraStream.end());
     }
 
     return out;
@@ -194,7 +199,7 @@ std::vector<Byte> decompress(const std::vector<Byte>& compressed)
 
     const uint8_t* p = compressed.data();
 
-    if (p[0] != 'L' || p[1] != 'Z' || p[2] != 'H' || p[3] != '4')
+    if (p[0] != 'L' || p[1] != 'Z' || p[2] != 'H' || p[3] != '8')
         return {};
 
     const uint32_t totalSize = readLE32(p + 4);
@@ -206,32 +211,41 @@ std::vector<Byte> decompress(const std::vector<Byte>& compressed)
 
     for (uint32_t ci = 0; ci < chunkCount; ++ci)
     {
-        if (pos + 28 > compressed.size()) return {};
+        if (pos + 29 > compressed.size()) return {};
 
-        LZ77Huffman::CompressedChunk chunk;
+        LZHuffman::CompressedChunk chunk;
         chunk.uncompressedSize = readLE32(p + pos); pos += 4;
         chunk.tokenCount       = readLE32(p + pos); pos += 4;
         chunk.literalByteCount = readLE32(p + pos); pos += 4;
-        chunk.distClassCount   = readLE32(p + pos); pos += 4;
-        chunk.lenClassCount    = readLE32(p + pos); pos += 4;
+        chunk.distPackedCount  = readLE32(p + pos); pos += 4;
+        chunk.lrl8Count        = readLE32(p + pos); pos += 4;
         chunk.extraBitCount    = readLE32(p + pos); pos += 4;
-        chunk.overflowCount    = readLE32(p + pos); pos += 4;
+        chunk.lrl8ExtraCount   = readLE32(p + pos); pos += 4;
+
+        uint8_t flags = p[pos++];
+        chunk.literalSubMode = (flags & 0x01) != 0;
 
         if (!readStreamHeader(p, compressed.size(), pos, chunk.tokenHeader, chunk.tokenStream))
             return {};
         if (!readStreamHeader(p, compressed.size(), pos, chunk.literalHeader, chunk.literalStream))
             return {};
-        if (!readStreamHeader(p, compressed.size(), pos, chunk.distClassHeader, chunk.distClassStream))
+        if (!readStreamHeader(p, compressed.size(), pos, chunk.distPackedHeader, chunk.distPackedStream))
             return {};
-        if (!readStreamHeader(p, compressed.size(), pos, chunk.lenClassHeader, chunk.lenClassStream))
-            return {};
-
-        if (!readRawStream(p, compressed.size(), pos, chunk.extraBitsStream))
-            return {};
-        if (!readRawStream(p, compressed.size(), pos, chunk.overflowStream))
+        if (!readStreamHeader(p, compressed.size(), pos, chunk.lrl8Header, chunk.lrl8Stream))
             return {};
 
-        auto decoded = LZ77Huffman::decompressChunk(chunk);
+        // Extra bits: extract mode from top 2 bits of size field
+        if (pos + 4 > compressed.size()) return {};
+        uint32_t packedSize = readLE32(p + pos); pos += 4;
+        chunk.extraBitsMode = static_cast<uint8_t>(packedSize >> 30);
+        const uint32_t extraSize = packedSize & 0x3FFFFFFF;
+        if (pos + extraSize > compressed.size()) return {};
+        chunk.extraBitsStream.assign(p + pos, p + pos + extraSize);
+        pos += extraSize;
+        if (!readRawStream(p, compressed.size(), pos, chunk.lrl8ExtraStream))
+            return {};
+
+        const auto decoded = LZHuffman::decompressChunk(chunk);
         output.insert(output.end(), decoded.begin(), decoded.end());
     }
 
@@ -239,3 +253,4 @@ std::vector<Byte> decompress(const std::vector<Byte>& compressed)
 }
 
 } // namespace compression
+

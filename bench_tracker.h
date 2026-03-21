@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <vector>
 #include <map>
@@ -6,7 +6,6 @@
 #include <sstream>
 #include <iostream>
 #include <iomanip>
-#include <cmath>
 #include <algorithm>
 
 // Benchmark result for a single test case
@@ -19,24 +18,24 @@ struct BenchmarkResult
     double decompressionTime_ms = 0.0;
     bool roundtrip = false;
 
-    double getRatio() const
+    [[nodiscard]] double getRatio() const
     {
         return compressedSize > 0
-            ? static_cast<double>(uncompressedSize) / compressedSize
+            ? static_cast<double>(uncompressedSize) / static_cast<double>(compressedSize)
             : 0.0;
     }
 
-    double getCompressSpeed_MB_s() const
+    [[nodiscard]] double getCompressSpeed_MB_s() const
     {
         return compressionTime_ms > 0
-            ? (uncompressedSize / (1024.0 * 1024.0)) / (compressionTime_ms / 1000.0)
+            ? (static_cast<double>(uncompressedSize) / (1024.0 * 1024.0)) / (compressionTime_ms / 1000.0)
             : 0.0;
     }
 
-    double getDecompressSpeed_MB_s() const
+    [[nodiscard]] double getDecompressSpeed_MB_s() const
     {
         return decompressionTime_ms > 0
-            ? (uncompressedSize / (1024.0 * 1024.0)) / (decompressionTime_ms / 1000.0)
+            ? (static_cast<double>(uncompressedSize) / (1024.0 * 1024.0)) / (decompressionTime_ms / 1000.0)
             : 0.0;
     }
 };
@@ -50,7 +49,7 @@ public:
     BenchmarkTracker() = default;
 
     // Save current benchmark results to file
-    void saveResults(const std::string& filename,
+    static void saveResults(const std::string& filename,
                      const std::vector<BenchmarkResult>& results)
     {
         // Save to current working directory
@@ -83,7 +82,7 @@ public:
     }
 
     // Load previous benchmark results
-    std::vector<BenchmarkResult> loadResults(const std::string& filename)
+    static std::vector<BenchmarkResult> loadResults(const std::string& filename)
     {
         std::vector<BenchmarkResult> results;
         std::ifstream f(filename);
@@ -126,7 +125,7 @@ public:
     }
 
     // Print comparison table (current vs previous)
-    void printDeltaReport(const std::vector<BenchmarkResult>& current,
+    static void printDeltaReport(const std::vector<BenchmarkResult>& current,
                           const std::vector<BenchmarkResult>& previous)
     {
         std::cout << "\n=== Benchmark Delta Report ===\n";
@@ -134,7 +133,7 @@ public:
     }
 
     // Save comparison table to file
-    void saveDeltaReport(const std::string& filename,
+    static void saveDeltaReport(const std::string& filename,
                          const std::vector<BenchmarkResult>& current,
                          const std::vector<BenchmarkResult>& previous)
     {
@@ -150,7 +149,7 @@ public:
 
 private:
     // Implementation for printing/saving delta report
-    void printDeltaReportImpl(const std::vector<BenchmarkResult>& current,
+    static void printDeltaReportImpl(const std::vector<BenchmarkResult>& current,
                              const std::vector<BenchmarkResult>& previous,
                              std::ofstream* file)
     {
@@ -179,9 +178,9 @@ private:
 
         for (const auto& c : current)
         {
-            auto it = std::find_if(previous.begin(), previous.end(),
-                                   [&](const BenchmarkResult& p)
-                                   { return p.name == c.name; });
+            auto it = std::ranges::find_if(previous,
+                                           [&](const BenchmarkResult& p)
+                                           { return p.name == c.name; });
 
             if (it == previous.end())
             {
@@ -221,23 +220,24 @@ private:
 public:
 
     // Summary statistics - with per-data-type averages
-    void printSummary(const std::vector<BenchmarkResult>& results)
+    static void printSummary(const std::vector<BenchmarkResult>& results)
     {
-        // Group results by data type
-        std::map<std::string, std::vector<const BenchmarkResult*>> byType;
+        // Group results by data type (store indices to avoid pointer-to-local issues)
+        std::map<std::string, std::vector<size_t>> byType;
         int totalPassCount = 0;
 
-        for (const auto& r : results)
+        for (size_t idx = 0; idx < results.size(); ++idx)
         {
+            const auto& r = results[idx];
             // Extract data type name (everything before the last space which is the size)
             std::string name = r.name;
-            size_t lastSpace = name.rfind(' ');
-            std::string dataType = (lastSpace != std::string::npos)
+            const size_t lastSpace = name.rfind(' ');
+            const std::string dataType = (lastSpace != std::string::npos)
                 ? name.substr(0, lastSpace)
                 : name;
 
-            byType[dataType].push_back(&r);
-            if (r.roundtrip) totalPassCount++;
+            byType[dataType].push_back(idx);
+            if (r.roundtrip) ++totalPassCount;
         }
 
         std::cout << "\n=== Summary ===\n";
@@ -253,24 +253,25 @@ public:
                   << "\n";
         std::cout << std::string(100, '-') << "\n";
 
-        for (const auto& [dataType, results_for_type] : byType)
+        for (const auto& [dataType, indices] : byType)
         {
-            double typeAvgRatio = 0;
-            double typeAvgEncSpeed = 0;
-            double typeAvgDecSpeed = 0;
+            double typeAvgRatio    = 0.0;
+            double typeAvgEncSpeed = 0.0;
+            double typeAvgDecSpeed = 0.0;
 
-            for (const auto* r : results_for_type)
+            for (const size_t i : indices)
             {
-                typeAvgRatio += r->getRatio();
-                typeAvgEncSpeed += r->getCompressSpeed_MB_s();
-                typeAvgDecSpeed += r->getDecompressSpeed_MB_s();
+                typeAvgRatio    += results[i].getRatio();
+                typeAvgEncSpeed += results[i].getCompressSpeed_MB_s();
+                typeAvgDecSpeed += results[i].getDecompressSpeed_MB_s();
             }
 
-            if (!results_for_type.empty())
+            if (!indices.empty())
             {
-                typeAvgRatio /= results_for_type.size();
-                typeAvgEncSpeed /= results_for_type.size();
-                typeAvgDecSpeed /= results_for_type.size();
+                const auto count = static_cast<double>(indices.size());
+                typeAvgRatio    /= count;
+                typeAvgEncSpeed /= count;
+                typeAvgDecSpeed /= count;
             }
 
             std::cout << std::left << std::setw(35) << dataType

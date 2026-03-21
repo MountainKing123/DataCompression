@@ -1,4 +1,4 @@
-﻿#include "huffman.h"
+#include "huffman.h"
 #include <iostream>
 #include <vector>
 #include <iomanip>
@@ -76,3 +76,4 @@ int main()
     std::cout << "All edge case tests passed!\n";
     return 0;
 }
+

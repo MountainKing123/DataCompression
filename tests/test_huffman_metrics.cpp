@@ -1,4 +1,4 @@
-﻿#include "huffman.h"
+#include "huffman.h"
 #include <iostream>
 #include <vector>
 #include <iomanip>
@@ -223,4 +223,5 @@ int main()
 
     return 0;
 }
+
 

@@ -1,16 +1,16 @@
-﻿#include "lz77.h"
+#include "lz.h"
 #include <iostream>
 #include <vector>
 #include <cassert>
 #include <iomanip>
 
-void printSymbols(const LZ77::IntermediateStream& stream, size_t maxShow = 20)
+void printSymbols(const LZ::IntermediateStream& stream, const size_t maxShow = 20)
 {
     std::cout << "Symbols (" << stream.symbols.size() << " total):\n";
     for (size_t i = 0; i < std::min(maxShow, stream.symbols.size()); ++i)
     {
         const auto& sym = stream.symbols[i];
-        if (sym.type == LZ77::EncodedSymbol::Literal)
+        if (sym.type == LZ::EncodedSymbol::Literal)
         {
             std::cout << "  [" << i << "] Literal: " << std::hex << (int)sym.literal << std::dec << "\n";
         }
@@ -39,13 +39,13 @@ int main()
         for (auto b : input) std::cout << std::hex << (int)b << " ";
         std::cout << std::dec << "\n";
 
-        LZ77::CompressOptions opts;
-        auto stream = LZ77::encodeChunk(input, opts);
+        LZ::CompressOptions opts;
+        auto stream = LZ::encodeChunk(input, opts);
 
         std::cout << "Uncompressed size: " << stream.uncompressedSize << "\n";
         printSymbols(stream);
 
-        auto decoded = LZ77::decodeStream(stream);
+        auto decoded = LZ::decodeStream(stream);
         bool match = (input == decoded);
         std::cout << "Result: " << (match ? "PASS" : "FAIL") << "\n\n";
         assert(match);
@@ -64,8 +64,8 @@ int main()
 
         std::cout << "Input: " << text << " (repeated 3x, " << chunk.size() << " bytes)\n";
 
-        LZ77::CompressOptions opts;
-        auto stream = LZ77::encodeChunk(chunk, opts);
+        LZ::CompressOptions opts;
+        auto stream = LZ::encodeChunk(chunk, opts);
 
         std::cout << "Symbol count: " << stream.symbols.size() << "\n";
         std::cout << "Symbols breakdown:\n";
@@ -73,13 +73,13 @@ int main()
         size_t literals = 0, matches = 0;
         for (const auto& sym : stream.symbols)
         {
-            if (sym.type == LZ77::EncodedSymbol::Literal) literals++;
+            if (sym.type == LZ::EncodedSymbol::Literal) literals++;
             else matches++;
         }
         std::cout << "  Literals: " << literals << "\n";
         std::cout << "  Matches:  " << matches << "\n";
 
-        auto decoded = LZ77::decodeStream(stream);
+        auto decoded = LZ::decodeStream(stream);
         bool match = (chunk == decoded);
         std::cout << "Result: " << (match ? "PASS" : "FAIL") << "\n\n";
         assert(match);
@@ -94,13 +94,13 @@ int main()
         for (auto b : input) std::cout << std::hex << (int)b << " ";
         std::cout << std::dec << "\n";
 
-        LZ77::CompressOptions opts;
-        auto stream = LZ77::encodeChunk(input, opts);
+        LZ::CompressOptions opts;
+        auto stream = LZ::encodeChunk(input, opts);
 
         std::cout << "Symbol count: " << stream.symbols.size() << "\n";
         std::cout << "(Should be all literals, no matches)\n";
 
-        auto decoded = LZ77::decodeStream(stream);
+        auto decoded = LZ::decodeStream(stream);
         bool match = (input == decoded);
         std::cout << "Result: " << (match ? "PASS" : "FAIL") << "\n\n";
         assert(match);
@@ -120,14 +120,14 @@ int main()
 
         std::cout << "Input: " << pattern << " (repeated 10x, " << input.size() << " bytes)\n";
 
-        LZ77::CompressOptions opts;
-        auto stream = LZ77::encodeChunk(input, opts);
+        LZ::CompressOptions opts;
+        auto stream = LZ::encodeChunk(input, opts);
 
         size_t literals = 0, matches = 0;
         uint32_t totalMatchLen = 0;
         for (const auto& sym : stream.symbols)
         {
-            if (sym.type == LZ77::EncodedSymbol::Literal) literals++;
+            if (sym.type == LZ::EncodedSymbol::Literal) literals++;
             else
             {
                 matches++;
@@ -138,10 +138,10 @@ int main()
         std::cout << "Symbols: " << stream.symbols.size() << "\n";
         std::cout << "  Literals: " << literals << "\n";
         std::cout << "  Matches:  " << matches << " (total " << totalMatchLen << " bytes)\n";
-        std::cout << "Compression: " << input.size() << " → " << stream.symbols.size()
+        std::cout << "Compression: " << input.size() << " ? " << stream.symbols.size()
                  << " symbols\n";
 
-        auto decoded = LZ77::decodeStream(stream);
+        auto decoded = LZ::decodeStream(stream);
         bool match = (input == decoded);
         std::cout << "Result: " << (match ? "PASS" : "FAIL") << "\n\n";
         assert(match);
@@ -150,4 +150,5 @@ int main()
     std::cout << "=== All LZ77 tests passed! ===\n";
     return 0;
 }
+
 

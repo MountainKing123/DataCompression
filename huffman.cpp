@@ -1,4 +1,4 @@
-﻿#include "huffman.h"
+#include "huffman.h"
 #include "bitstream.h"
 #include <algorithm>
 #include <queue>
@@ -12,9 +12,9 @@ namespace
     constexpr uint8_t kModeDense = 0;
     constexpr uint8_t kModeSparse = 1;
 
-    void writeByte(BitWriter& writer, uint8_t v) { writer.writeBits(v, 8); }
+    void writeByte(BitWriter& writer, const uint8_t v) { writer.writeBits(v, 8); }
 
-    void writeU32BE(BitWriter& writer, uint32_t v)
+    void writeU32BE(BitWriter& writer, const uint32_t v)
     {
         writeByte(writer, static_cast<uint8_t>((v >> 24) & 0xFF));
         writeByte(writer, static_cast<uint8_t>((v >> 16) & 0xFF));
@@ -39,7 +39,7 @@ namespace
         return v;
     }
 
-    uint16_t packSecondaryEntry(uint8_t symbol, uint8_t length)
+    uint16_t packSecondaryEntry(const uint8_t symbol, const uint8_t length)
     {
         return static_cast<uint16_t>((static_cast<uint16_t>(symbol) << 8) | length);
     }
@@ -53,15 +53,36 @@ void Huffman::buildFrequenciesSerial(const std::vector<uint8_t>& input,
                                      std::array<uint32_t, MaxSymbols>& freq)
 {
     freq.fill(0);
-    for (uint8_t b : input)
+
+    if (input.size() < 16)
     {
-        freq[b]++;
+        for (uint8_t b : input)
+            freq[b]++;
+        return;
     }
+
+    // 4-way unrolled histogram avoids store-forwarding stalls
+    std::array<uint32_t, 256> f0{}, f1{}, f2{}, f3{};
+    const size_t n = input.size();
+    const size_t n4 = n & ~size_t{3};
+
+    for (size_t i = 0; i < n4; i += 4)
+    {
+        f0[input[i]]++;
+        f1[input[i + 1]]++;
+        f2[input[i + 2]]++;
+        f3[input[i + 3]]++;
+    }
+    for (size_t i = n4; i < n; ++i)
+        f0[input[i]]++;
+
+    for (int i = 0; i < 256; ++i)
+        freq[i] = f0[i] + f1[i] + f2[i] + f3[i];
 }
 
 void Huffman::buildFrequenciesParallel(const std::vector<uint8_t>& input,
                                        std::array<uint32_t, MaxSymbols>& freq,
-                                       size_t numThreads)
+                                       const size_t numThreads)
 {
     if (numThreads <= 1)
     {
@@ -121,7 +142,7 @@ void Huffman::buildCodeLengths(const std::array<uint32_t, MaxSymbols>& freq,
     {
         const std::array<Node, MaxSymbols * 2>* nodes;
 
-        bool operator()(int16_t a, int16_t b) const
+        bool operator()(const int16_t a, const int16_t b) const
         {
             if ((*nodes)[a].frequency != (*nodes)[b].frequency)
                 return (*nodes)[a].frequency > (*nodes)[b].frequency;
@@ -149,9 +170,9 @@ void Huffman::buildCodeLengths(const std::array<uint32_t, MaxSymbols>& freq,
 
     while (minHeap.size() > 1)
     {
-        int16_t a = minHeap.top();
+        const int16_t a = minHeap.top();
         minHeap.pop();
-        int16_t b = minHeap.top();
+        const int16_t b = minHeap.top();
         minHeap.pop();
         nodes[nodeCount] = {nodes[a].frequency + nodes[b].frequency, a, b, -1, -1};
         nodes[a].parent = nodes[b].parent = nodeCount;
@@ -166,12 +187,72 @@ void Huffman::buildCodeLengths(const std::array<uint32_t, MaxSymbols>& freq,
             int16_t current = i;
             while (nodes[current].parent != -1)
             {
-                depth++;
+                ++depth;
                 current = nodes[current].parent;
             }
-            if (depth > MaxCodeLength) depth = MaxCodeLength;
             lengths[nodes[i].symbol] = static_cast<uint8_t>(depth);
         }
+    }
+
+    // Enforce MaxCodeLength limit via Kraft inequality redistribution.
+    bool needsRedistribution = false;
+    for (int i = 0; i < MaxSymbols; ++i)
+    {
+        if (lengths[i] > MaxCodeLength)
+        {
+            needsRedistribution = true;
+            break;
+        }
+    }
+
+    if (needsRedistribution)
+    {
+        struct LenSym { uint8_t len; int sym; };
+        std::vector<LenSym> active;
+        for (int i = 0; i < MaxSymbols; ++i)
+        {
+            if (lengths[i] > 0)
+                active.push_back({lengths[i], i});
+        }
+
+        std::sort(active.begin(), active.end(), [](const LenSym& a, const LenSym& b)
+        {
+            return a.len > b.len;
+        });
+
+        for (auto& ls : active)
+        {
+            if (ls.len > MaxCodeLength)
+                ls.len = MaxCodeLength;
+        }
+
+        for (;;)
+        {
+            uint32_t kraft = 0;
+            for (const auto& ls : active)
+                kraft += (1u << (MaxCodeLength - ls.len));
+
+            if (kraft <= (1u << MaxCodeLength))
+                break;
+
+            for (int i = static_cast<int>(active.size()) - 1; i >= 0; --i)
+            {
+                if (active[i].len < MaxCodeLength)
+                {
+                    active[i].len++;
+                    break;
+                }
+            }
+
+            std::sort(active.begin(), active.end(), [](const LenSym& a, const LenSym& b)
+            {
+                return a.len > b.len;
+            });
+        }
+
+        lengths.fill(0);
+        for (const auto& ls : active)
+            lengths[ls.sym] = ls.len;
     }
 }
 
@@ -192,7 +273,7 @@ void Huffman::buildCanonicalCodes(const std::array<uint8_t, MaxSymbols>& lengths
 
     for (int i = 0; i < MaxSymbols; ++i)
     {
-        uint8_t len = lengths[i];
+        const uint8_t len = lengths[i];
         if (len)
         {
             codes[i] = {nextCode[len], len};
@@ -305,7 +386,7 @@ std::vector<uint8_t> Huffman::compress(const std::vector<uint8_t>& input,
     int usedSymbols = 0;
     for (uint8_t len : lengths)
     {
-        if (len) usedSymbols++;
+        if (len) ++usedSymbols;
     }
 
     const size_t denseHeaderBytes = 256;
@@ -398,8 +479,8 @@ Huffman::DecodedStream Huffman::parsePass(const std::vector<uint8_t>& compressed
         const int usedSymbols = static_cast<int>(readByte(reader)) + 1;
         for (int i = 0; i < usedSymbols; ++i)
         {
-            uint8_t symbol = readByte(reader);
-            uint8_t len = readByte(reader);
+            const uint8_t symbol = readByte(reader);
+            const uint8_t len = readByte(reader);
             lengths[symbol] = len;
         }
     }
@@ -466,7 +547,7 @@ std::vector<uint8_t> Huffman::decompress(const std::vector<uint8_t>& input,
     }
 
     // Standard path: run both passes
-    auto decoded = parsePass(input);
+    const auto decoded = parsePass(input);
     return applyPass(decoded);
 }
 
@@ -539,11 +620,11 @@ std::vector<uint8_t> Huffman::compressChunked(const std::vector<uint8_t>& input,
     writeByte(globalWriter, kModeChunked);
     writeU32BE(globalWriter, static_cast<uint32_t>(input.size()));
 
-    size_t chunkSize = opts.chunkSize;
+    const size_t chunkSize = opts.chunkSize;
     std::vector<std::vector<uint8_t>> chunks;
     for (size_t offset = 0; offset < input.size(); offset += chunkSize)
     {
-        size_t end = std::min(offset + chunkSize, input.size());
+        const size_t end = std::min(offset + chunkSize, input.size());
         chunks.emplace_back(input.begin() + static_cast<std::vector<uint8_t>::difference_type>(offset),
                            input.begin() + static_cast<std::vector<uint8_t>::difference_type>(end));
     }
@@ -555,7 +636,7 @@ std::vector<uint8_t> Huffman::compressChunked(const std::vector<uint8_t>& input,
 
     for (const auto& chunk : chunks)
     {
-        auto compressed = compressChunk(chunk, opts);
+        const auto compressed = compressChunk(chunk, opts);
         compressedChunks.push_back(compressed);
     }
 
@@ -652,8 +733,7 @@ std::vector<uint8_t> Huffman::decompressChunk(const std::vector<uint8_t>& compre
     return decoded;
 }
 
-std::vector<uint8_t> Huffman::decompressChunked(const std::vector<uint8_t>& input,
-                                                const DecompressOptions& opts)
+std::vector<uint8_t> Huffman::decompressChunked(const std::vector<uint8_t>& input)
 {
     if (input.size() < 12) return {};
 
@@ -679,7 +759,7 @@ std::vector<uint8_t> Huffman::decompressChunked(const std::vector<uint8_t>& inpu
 
     for (uint32_t i = 0; i < chunkCount; ++i)
     {
-        [[maybe_unused]] const uint32_t uncompressedSize = readU32BE(reader);
+        readU32BE(reader);  // uncompressedSize: consumed to advance stream position, value unused here
         const uint32_t compressedSize = readU32BE(reader);
 
         std::vector<uint8_t> compressedChunk;
@@ -690,14 +770,11 @@ std::vector<uint8_t> Huffman::decompressChunked(const std::vector<uint8_t>& inpu
             compressedChunk.push_back(readByte(reader));
         }
 
-        auto decompressed = decompressChunk(compressedChunk);
+        const auto decompressed = decompressChunk(compressedChunk);
         output.insert(output.end(), decompressed.begin(), decompressed.end());
     }
 
     return output;
 }
 
-std::vector<uint8_t> Huffman::decompressChunked(const std::vector<uint8_t>& input)
-{
-    return decompressChunked(input, DecompressOptions{});
-}
+

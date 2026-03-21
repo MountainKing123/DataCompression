@@ -1,17 +1,25 @@
-# Project Specific
-docs/
+# Project Specific - Build Artifacts
 build/
 build_log.txt
-
-# CMake
 cmake-build-*/
+CMakeLists.txt.user
+docs/
+
+# CMake temporary files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake
 
 # JetBrains IDEs
 .idea/
 .clion-config.yaml
+*.iml
 
 # Visual Studio
 .vs/
+*.sln.user
+.VisualStudio*/
 
 # VS Code
 .vscode/
@@ -60,3 +68,10 @@ cmake-build-*/
 
 # debug information files
 *.dwo
+
+# Backup and temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+*.tmp

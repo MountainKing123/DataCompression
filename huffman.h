@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <array>
 #include <vector>
 #include <cstdint>
@@ -18,7 +18,6 @@ public:
 
     struct DecompressOptions {
         bool separatePasses = false;
-        size_t numThreads = std::thread::hardware_concurrency();
     };
 
     static std::vector<uint8_t> compress(const std::vector<uint8_t>& input,
@@ -52,8 +51,6 @@ public:
                                                  const CompressOptions& opts);
     static std::vector<uint8_t> compressChunked(const std::vector<uint8_t>& input);
 
-    static std::vector<uint8_t> decompressChunked(const std::vector<uint8_t>& input,
-                                                   const DecompressOptions& opts);
     static std::vector<uint8_t> decompressChunked(const std::vector<uint8_t>& input);
 
     static std::vector<uint8_t> compressChunk(const std::vector<uint8_t>& chunkData,
@@ -61,7 +58,7 @@ public:
 
     static std::vector<uint8_t> decompressChunk(const std::vector<uint8_t>& compressedChunk);
 
-    // --- Shared building blocks (used by LZ77Huffman as well) ---
+    // --- Shared building blocks (used by LZHuffman as well) ---
 
     static constexpr int MaxSymbols = 256;
     static constexpr int MaxCodeLength = 15;
@@ -99,5 +96,4 @@ public:
                                 std::array<PrimaryDecodeEntry, PrimaryDecodeSize>& primaryTable,
                                 std::vector<uint16_t>& secondaryTable);
 
-private:
 };

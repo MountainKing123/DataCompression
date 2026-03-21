@@ -1,4 +1,4 @@
-﻿#include "compressor.h"
+#include "compressor.h"
 
 #include <iostream>
 #include <vector>
@@ -6,7 +6,7 @@
 #include <iomanip>
 #include <cassert>
 
-void printHex(const std::vector<uint8_t>& data, size_t maxBytes = 256)
+void printHex(const std::vector<uint8_t>& data, const size_t maxBytes = 256)
 {
     size_t limit = std::min(data.size(), maxBytes);
     for (size_t i = 0; i < limit; ++i)
@@ -33,10 +33,10 @@ int main()
     // Compress
     compression::CompressOptions opts;
     opts.chunkSize = 32 * 1024;
-    auto compressed = compression::compress(input, opts);
+    const auto compressed = compression::compress(input, opts);
 
     // Decompress
-    auto decompressed = compression::decompress(compressed);
+    const auto decompressed = compression::decompress(compressed);
 
     // Print info
     std::cout << "=== LZ77+Huffman Token-Based Compression ===\n\n";
