@@ -9,14 +9,14 @@
 // Each chunk produces independent bitstreams with per-stream entropy tables.
 //
 // Token byte layout:
-//   Bits 0-1: litlen  (0-2 = literal count; 3 = escape to lrl8 stream)
-//   Bits 2-5: matchlen field (0-14 = matchlen 3-17; 15 = escape to lrl8 stream)
+//   Bits 0-1: litlen  (0-2 = literal count; 3 = escape to lenOverflow stream)
+//   Bits 2-5: matchlen field (0-14 = matchlen 3-17; 15 = escape to lenOverflow stream)
 //   Bits 6-7: offset mode (0 = new offset; 1/2/3 = recent offset 0/1/2)
 //
-// Overflow (lrl8) stream - matches Kraken's lrl8 approach:
+// Length overflow stream:
 //   Both litlen overflow and matchlen overflow write into the same byte stream.
 //   Values 0-254 store the overflow value directly (1 byte).
-//   Value 255 signals escape: the actual value follows as a LE32 in lrl8ExtraStream.
+//   Value 255 signals escape: the actual value follows as a LE32 in lenOverflowExtraStream.
 //
 // Offset encoding: packed byte absorbs log2 class + 4 mantissa bits.
 //   Packed byte = high nibble (extra-bit count) | low nibble (4 mantissa bits)
@@ -61,25 +61,25 @@ public:
         StreamHeader tokenHeader;
         StreamHeader literalHeader;
         StreamHeader distPackedHeader;
-        StreamHeader lrl8Header;            // unified litlen+matchlen overflow stream
+        StreamHeader lenOverflowHeader;     // unified litlen+matchlen overflow stream
 
         std::vector<uint8_t> tokenStream;
         std::vector<uint8_t> literalStream;
-        std::vector<uint8_t> distPackedStream;  // packed offset bytes (entropy-coded)
-        std::vector<uint8_t> lrl8Stream;         // unified overflow: 0-254 direct, 255 = escape
-        std::vector<uint8_t> extraBitsStream;    // extra bits for packed offsets (raw, no mode byte)
-        std::vector<uint8_t> lrl8ExtraStream;    // LE32 values for lrl8 escapes (255)
-        uint8_t extraBitsMode = 0;               // 0=empty, 1=fwd-only, 2=bidirectional
+        std::vector<uint8_t> distPackedStream;      // packed offset bytes (entropy-coded)
+        std::vector<uint8_t> lenOverflowStream;     // unified overflow: 0-254 direct, 255 = escape
+        std::vector<uint8_t> extraBitsStream;       // extra bits for packed offsets (raw, no mode byte)
+        std::vector<uint8_t> lenOverflowExtraStream; // LE32 values for lenOverflow escapes (255)
+        uint8_t extraBitsMode = 0;                  // 0=empty, 1=fwd-only, 2=bidirectional
 
         uint32_t uncompressedSize = 0;
         bool literalSubMode = false;  // true = literals stored as deltas
 
-        uint32_t tokenCount       = 0;
-        uint32_t literalByteCount = 0;
-        uint32_t distPackedCount  = 0;
-        uint32_t lrl8Count        = 0;   // number of bytes in lrl8Stream
-        uint32_t extraBitCount    = 0;
-        uint32_t lrl8ExtraCount   = 0;  // number of LE32 escapes
+        uint32_t tokenCount          = 0;
+        uint32_t literalByteCount    = 0;
+        uint32_t distPackedCount     = 0;
+        uint32_t lenOverflowCount    = 0;   // number of bytes in lenOverflowStream
+        uint32_t extraBitCount       = 0;
+        uint32_t lenOverflowExtraCount = 0; // number of LE32 escapes
     };
 
     // Packed offset encoding: absorbs 4 mantissa bits into the entropy-coded byte.
@@ -113,10 +113,10 @@ private:
     {
         std::vector<uint8_t> tokens;
         std::vector<uint8_t> literals;
-        std::vector<uint8_t> subLiterals;   // delta-coded: literal - prediction
+        std::vector<uint8_t> subLiterals;       // delta-coded: literal - prediction
         std::vector<uint8_t> distPacked;
-        std::vector<uint8_t> lrl8;
-        std::vector<uint8_t> lrl8Extra;
+        std::vector<uint8_t> lenOverflow;
+        std::vector<uint8_t> lenOverflowExtra;
         std::vector<uint8_t> extraBitsData;
         uint32_t extraBitCount = 0;
         uint8_t extraBitsMode = 0;   // 0=empty, 1=fwd-only, 2=bidirectional
@@ -125,9 +125,9 @@ private:
     static TokenizedStreams tokenize(const LZ::IntermediateStream& intermediate,
                                      const std::vector<uint8_t>& input);
 
-    // Write a value into the lrl8 stream. Values 0-254 stored directly.
+    // Write a value into the lenOverflow stream. Values 0-254 stored directly.
     // Values >= 255 write 255 as escape byte, then store actual value as LE32.
-    static void writeLrl8(TokenizedStreams& ts, uint32_t value);
+    static void writeLenOverflow(TokenizedStreams& ts, uint32_t value);
 
     static std::vector<uint8_t> encodeStream(const std::vector<uint8_t>& input,
                                              const std::array<Huffman::HuffmanCode, 256>& codes,

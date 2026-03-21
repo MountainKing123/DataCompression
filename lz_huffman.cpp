@@ -54,23 +54,23 @@ uint32_t LZHuffman::unpackOffset(const uint8_t packed, const uint32_t extraBits)
 }
 
 // ---------------------------------------------------------------------------
-// Unified overflow (lrl8) stream helpers
+// Unified length overflow stream helpers
 // ---------------------------------------------------------------------------
 
-void LZHuffman::writeLrl8(TokenizedStreams& ts, const uint32_t value)
+void LZHuffman::writeLenOverflow(TokenizedStreams& ts, const uint32_t value)
 {
     if (value < 255)
     {
-        ts.lrl8.push_back(static_cast<uint8_t>(value));
+        ts.lenOverflow.push_back(static_cast<uint8_t>(value));
     }
     else
     {
-        ts.lrl8.push_back(255);
-        // Store LE32 in lrl8Extra
-        ts.lrl8Extra.push_back(static_cast<uint8_t>(value));
-        ts.lrl8Extra.push_back(static_cast<uint8_t>(value >> 8));
-        ts.lrl8Extra.push_back(static_cast<uint8_t>(value >> 16));
-        ts.lrl8Extra.push_back(static_cast<uint8_t>(value >> 24));
+        ts.lenOverflow.push_back(255);
+        // Store LE32 in lenOverflowExtra
+        ts.lenOverflowExtra.push_back(static_cast<uint8_t>(value));
+        ts.lenOverflowExtra.push_back(static_cast<uint8_t>(value >> 8));
+        ts.lenOverflowExtra.push_back(static_cast<uint8_t>(value >> 16));
+        ts.lenOverflowExtra.push_back(static_cast<uint8_t>(value >> 24));
     }
 }
 
@@ -115,7 +115,7 @@ LZHuffman::tokenize(const LZ::IntermediateStream& intermediate,
             else
             {
                 litlenField = LitLenEscape;
-                writeLrl8(ts, static_cast<uint32_t>(litCount - LitLenEscape));
+                writeLenOverflow(ts, static_cast<uint32_t>(litCount - LitLenEscape));
             }
             ts.tokens.push_back(makeToken(litlenField, 0, 0));
             for (size_t j = 0; j < litCount; ++j)
@@ -144,8 +144,8 @@ LZHuffman::tokenize(const LZ::IntermediateStream& intermediate,
         else
         {
             litlenField = LitLenEscape;
-            // lrl8: litlen overflow = litCount - 3
-            writeLrl8(ts, static_cast<uint32_t>(litCount - LitLenEscape));
+            // lenOverflow: litlen overflow = litCount - 3
+            writeLenOverflow(ts, static_cast<uint32_t>(litCount - LitLenEscape));
         }
 
         for (size_t j = 0; j < litCount; ++j)
@@ -168,7 +168,7 @@ LZHuffman::tokenize(const LZ::IntermediateStream& intermediate,
         else
         {
             matchlenField = MatchLenEscape;
-            writeLrl8(ts, matchLen - (MatchLenInlineMax + 1));
+            writeLenOverflow(ts, matchLen - (MatchLenInlineMax + 1));
         }
 
         // Encode offset mode and update lastOffset for sub-literal prediction
@@ -431,9 +431,9 @@ LZHuffman::compressChunk(const std::vector<uint8_t>& input,
     result.tokenCount       = static_cast<uint32_t>(ts.tokens.size());
     result.literalByteCount = static_cast<uint32_t>(ts.literals.size());
     result.distPackedCount  = static_cast<uint32_t>(ts.distPacked.size());
-    result.lrl8Count        = static_cast<uint32_t>(ts.lrl8.size());
+    result.lenOverflowCount      = static_cast<uint32_t>(ts.lenOverflow.size());
     result.extraBitCount    = ts.extraBitCount;
-    result.lrl8ExtraCount   = static_cast<uint32_t>(ts.lrl8Extra.size() / 4);
+    result.lenOverflowExtraCount = static_cast<uint32_t>(ts.lenOverflowExtra.size() / 4);
 
     // Compare entropy of raw literals vs subtracted literals to decide mode
     auto histogramCost = [](const std::vector<uint8_t>& data) -> double
@@ -563,14 +563,14 @@ LZHuffman::compressChunk(const std::vector<uint8_t>& input,
         outStream = raw;
     };
 
-    encodeOneStream(ts.tokens,       result.tokenHeader,      result.tokenStream);
-    encodeOneStream(chosenLiterals,  result.literalHeader,    result.literalStream);
-    encodeOneStream(ts.distPacked,   result.distPackedHeader, result.distPackedStream);
-    encodeOneStream(ts.lrl8,         result.lrl8Header,       result.lrl8Stream);
+    encodeOneStream(ts.tokens,       result.tokenHeader,         result.tokenStream);
+    encodeOneStream(chosenLiterals,  result.literalHeader,       result.literalStream);
+    encodeOneStream(ts.distPacked,   result.distPackedHeader,    result.distPackedStream);
+    encodeOneStream(ts.lenOverflow,  result.lenOverflowHeader,   result.lenOverflowStream);
 
-    result.extraBitsStream = ts.extraBitsData;
-    result.extraBitsMode   = ts.extraBitsMode;
-    result.lrl8ExtraStream = ts.lrl8Extra;
+    result.extraBitsStream       = ts.extraBitsData;
+    result.extraBitsMode         = ts.extraBitsMode;
+    result.lenOverflowExtraStream = ts.lenOverflowExtra;
 
     return result;
 }
@@ -604,10 +604,10 @@ LZHuffman::decompressChunk(const CompressedChunk& chunk)
         return rleDecode(rleStream, expectedBytes);
     };
 
-    const auto tokens     = decodeOneStream(chunk.tokenHeader,      chunk.tokenStream,      chunk.tokenCount);
-    const auto literals   = decodeOneStream(chunk.literalHeader,    chunk.literalStream,    chunk.literalByteCount);
-    const auto distPacked = decodeOneStream(chunk.distPackedHeader, chunk.distPackedStream, chunk.distPackedCount);
-    const auto lrl8       = decodeOneStream(chunk.lrl8Header,       chunk.lrl8Stream,       chunk.lrl8Count);
+    const auto tokens      = decodeOneStream(chunk.tokenHeader,         chunk.tokenStream,         chunk.tokenCount);
+    const auto literals    = decodeOneStream(chunk.literalHeader,       chunk.literalStream,       chunk.literalByteCount);
+    const auto distPacked  = decodeOneStream(chunk.distPackedHeader,    chunk.distPackedStream,    chunk.distPackedCount);
+    const auto lenOverflow = decodeOneStream(chunk.lenOverflowHeader,   chunk.lenOverflowStream,   chunk.lenOverflowCount);
 
     BidirectionalBitReader extraReader(chunk.extraBitsMode,
                                        chunk.extraBitsStream.data(),
@@ -622,23 +622,23 @@ LZHuffman::decompressChunk(const CompressedChunk& chunk)
     std::vector<uint8_t> output;
     output.reserve(chunk.uncompressedSize);
 
-    size_t litIdx       = 0;
-    size_t distIdx      = 0;
-    size_t lrl8Idx      = 0;
-    size_t lrl8ExtraIdx = 0;   // byte index into lrl8ExtraStream (each entry = 4 bytes)
+    size_t litIdx              = 0;
+    size_t distIdx             = 0;
+    size_t lenOverflowIdx      = 0;
+    size_t lenOverflowExtraIdx = 0;   // byte index into lenOverflowExtraStream (each entry = 4 bytes)
 
-    // Read one lrl8 value: byte 0-254 direct, 255 = read LE32 from lrl8ExtraStream
-    auto readLrl8 = [&]() -> uint32_t {
-        const uint8_t escapeByte = lrl8.at(lrl8Idx++);
+    // Read one lenOverflow value: byte 0-254 direct, 255 = read LE32 from lenOverflowExtraStream
+    auto readLenOverflow = [&]() -> uint32_t {
+        const uint8_t escapeByte = lenOverflow.at(lenOverflowIdx++);
         if (escapeByte < 255)
             return escapeByte;
-        // Escape: read LE32 from lrl8ExtraStream
-        const auto& ex = chunk.lrl8ExtraStream;
-        const uint32_t le32Value = static_cast<uint32_t>(ex[lrl8ExtraIdx])
-                                 | (static_cast<uint32_t>(ex[lrl8ExtraIdx + 1]) << 8)
-                                 | (static_cast<uint32_t>(ex[lrl8ExtraIdx + 2]) << 16)
-                                 | (static_cast<uint32_t>(ex[lrl8ExtraIdx + 3]) << 24);
-        lrl8ExtraIdx += 4;
+        // Escape: read LE32 from lenOverflowExtraStream
+        const auto& ex = chunk.lenOverflowExtraStream;
+        const uint32_t le32Value = static_cast<uint32_t>(ex[lenOverflowExtraIdx])
+                                 | (static_cast<uint32_t>(ex[lenOverflowExtraIdx + 1]) << 8)
+                                 | (static_cast<uint32_t>(ex[lenOverflowExtraIdx + 2]) << 16)
+                                 | (static_cast<uint32_t>(ex[lenOverflowExtraIdx + 3]) << 24);
+        lenOverflowExtraIdx += 4;
         return le32Value;
     };
 
@@ -649,9 +649,9 @@ LZHuffman::decompressChunk(const CompressedChunk& chunk)
         const uint32_t matchlenField = (token >> 2) & 0x0F;
         const uint32_t offsetMode    = (token >> 6) & 0x03;
 
-        // Decode litlen overflow via lrl8
+        // Decode litlen overflow via lenOverflow stream
         if (litlen == LitLenEscape)
-            litlen = LitLenEscape + readLrl8();
+            litlen = LitLenEscape + readLenOverflow();
 
         // Copy literals (reconstruct from deltas if literalSubMode)
         for (uint32_t j = 0; j < litlen; ++j)
@@ -683,8 +683,8 @@ LZHuffman::decompressChunk(const CompressedChunk& chunk)
         }
         else
         {
-            // lrl8: overflow = matchLen - 18; reconstruct matchLen
-            matchLen = MatchLenInlineMax + 1 + readLrl8();
+            // lenOverflow: overflow = matchLen - 18; reconstruct matchLen
+            matchLen = MatchLenInlineMax + 1 + readLenOverflow();
         }
 
         // Decode offset

@@ -86,17 +86,17 @@ int main()
               << chunk.literalStream.size() << " encoded bytes\n";
     std::cout << "  DistPacked:  " << chunk.distPackedCount << " symbols, "
               << chunk.distPackedStream.size() << " encoded bytes\n";
-    std::cout << "  Lrl8:        " << chunk.lrl8Count << " symbols, "
-              << chunk.lrl8Stream.size() << " encoded bytes\n";
+    std::cout << "  LenOverflow: " << chunk.lenOverflowCount << " symbols, "
+              << chunk.lenOverflowStream.size() << " encoded bytes\n";
     std::cout << "  ExtraBits:   " << chunk.extraBitsStream.size() << " bytes\n";
-    std::cout << "  Lrl8Extra:   " << chunk.lrl8ExtraStream.size() << " bytes\n";
+    std::cout << "  LenOverflowExtra: " << chunk.lenOverflowExtraStream.size() << " bytes\n";
 
     const size_t totalHeaders = streamHeaderSize(chunk.tokenHeader) + streamHeaderSize(chunk.literalHeader)
-                        + streamHeaderSize(chunk.distPackedHeader) + streamHeaderSize(chunk.lrl8Header)
+                        + streamHeaderSize(chunk.distPackedHeader) + streamHeaderSize(chunk.lenOverflowHeader)
                         + 28 + 4 + 4;
     const size_t totalData = chunk.tokenStream.size() + chunk.literalStream.size()
-                     + chunk.distPackedStream.size() + chunk.lrl8Stream.size()
-                     + chunk.extraBitsStream.size() + chunk.lrl8ExtraStream.size();
+                     + chunk.distPackedStream.size() + chunk.lenOverflowStream.size()
+                     + chunk.extraBitsStream.size() + chunk.lenOverflowExtraStream.size();
 
     std::cout << "\n  Header overhead: " << totalHeaders << " bytes\n";
     std::cout << "  Data total:      " << totalData << " bytes\n";

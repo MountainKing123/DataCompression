@@ -167,9 +167,9 @@ std::vector<Byte> compress(const std::vector<Byte>& input,
         writeLE32(out, c.tokenCount);
         writeLE32(out, c.literalByteCount);
         writeLE32(out, c.distPackedCount);
-        writeLE32(out, c.lrl8Count);
+        writeLE32(out, c.lenOverflowCount);
         writeLE32(out, c.extraBitCount);
-        writeLE32(out, c.lrl8ExtraCount);
+        writeLE32(out, c.lenOverflowExtraCount);
 
         uint8_t flags = 0;
         if (c.literalSubMode) flags |= 0x01;
@@ -178,7 +178,7 @@ std::vector<Byte> compress(const std::vector<Byte>& input,
         writeStreamHeader(out, c.tokenHeader, c.tokenStream);
         writeStreamHeader(out, c.literalHeader, c.literalStream);
         writeStreamHeader(out, c.distPackedHeader, c.distPackedStream);
-        writeStreamHeader(out, c.lrl8Header, c.lrl8Stream);
+        writeStreamHeader(out, c.lenOverflowHeader, c.lenOverflowStream);
 
         // Extra bits: encode mode in top 2 bits of size field
         const auto extraSize = static_cast<uint32_t>(c.extraBitsStream.size());
@@ -186,8 +186,8 @@ std::vector<Byte> compress(const std::vector<Byte>& input,
         writeLE32(out, packedSize);
         out.insert(out.end(), c.extraBitsStream.begin(), c.extraBitsStream.end());
 
-        writeLE32(out, static_cast<uint32_t>(c.lrl8ExtraStream.size()));
-        out.insert(out.end(), c.lrl8ExtraStream.begin(), c.lrl8ExtraStream.end());
+        writeLE32(out, static_cast<uint32_t>(c.lenOverflowExtraStream.size()));
+        out.insert(out.end(), c.lenOverflowExtraStream.begin(), c.lenOverflowExtraStream.end());
     }
 
     return out;
@@ -218,9 +218,9 @@ std::vector<Byte> decompress(const std::vector<Byte>& compressed)
         chunk.tokenCount       = readLE32(p + pos); pos += 4;
         chunk.literalByteCount = readLE32(p + pos); pos += 4;
         chunk.distPackedCount  = readLE32(p + pos); pos += 4;
-        chunk.lrl8Count        = readLE32(p + pos); pos += 4;
-        chunk.extraBitCount    = readLE32(p + pos); pos += 4;
-        chunk.lrl8ExtraCount   = readLE32(p + pos); pos += 4;
+        chunk.lenOverflowCount    = readLE32(p + pos); pos += 4;
+        chunk.extraBitCount       = readLE32(p + pos); pos += 4;
+        chunk.lenOverflowExtraCount = readLE32(p + pos); pos += 4;
 
         uint8_t flags = p[pos++];
         chunk.literalSubMode = (flags & 0x01) != 0;
@@ -231,7 +231,7 @@ std::vector<Byte> decompress(const std::vector<Byte>& compressed)
             return {};
         if (!readStreamHeader(p, compressed.size(), pos, chunk.distPackedHeader, chunk.distPackedStream))
             return {};
-        if (!readStreamHeader(p, compressed.size(), pos, chunk.lrl8Header, chunk.lrl8Stream))
+        if (!readStreamHeader(p, compressed.size(), pos, chunk.lenOverflowHeader, chunk.lenOverflowStream))
             return {};
 
         // Extra bits: extract mode from top 2 bits of size field
@@ -242,7 +242,7 @@ std::vector<Byte> decompress(const std::vector<Byte>& compressed)
         if (pos + extraSize > compressed.size()) return {};
         chunk.extraBitsStream.assign(p + pos, p + pos + extraSize);
         pos += extraSize;
-        if (!readRawStream(p, compressed.size(), pos, chunk.lrl8ExtraStream))
+        if (!readRawStream(p, compressed.size(), pos, chunk.lenOverflowExtraStream))
             return {};
 
         const auto decoded = LZHuffman::decompressChunk(chunk);

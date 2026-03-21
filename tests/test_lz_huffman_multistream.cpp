@@ -34,10 +34,10 @@ int main()
                   << " bytes (" << streamTypeName(c.literalHeader.type) << ")\n";
         std::cout << "  DistPacked stream: " << c.distPackedStream.size()
                   << " bytes (" << streamTypeName(c.distPackedHeader.type) << ")\n";
-        std::cout << "  Lrl8 stream:       " << c.lrl8Stream.size()
-                  << " bytes (" << streamTypeName(c.lrl8Header.type) << ")\n";
+        std::cout << "  LenOverflow stream:  " << c.lenOverflowStream.size()
+                  << " bytes (" << streamTypeName(c.lenOverflowHeader.type) << ")\n";
         std::cout << "  ExtraBits stream:  " << c.extraBitsStream.size() << " bytes\n";
-        std::cout << "  Lrl8Extra stream:  " << c.lrl8ExtraStream.size() << " bytes\n";
+        std::cout << "  LenOverflowExtra stream:  " << c.lenOverflowExtraStream.size() << " bytes\n";
         std::cout << "  Roundtrip: " << (d == input ? "PASS" : "FAIL") << "\n\n";
         assert(d == input);
     }
@@ -96,7 +96,7 @@ int main()
         const auto c = LZHuffman::compressChunk(input);
         const auto d = LZHuffman::decompressChunk(c);
         std::cout << "  Input: " << input.size() << " bytes, Tokens: " << c.tokenCount << "\n";
-        std::cout << "  Lrl8 bytes: " << c.lrl8Stream.size() << "\n";
+        std::cout << "  LenOverflow bytes: " << c.lenOverflowStream.size() << "\n";
         std::cout << "  Roundtrip: " << (d == input ? "PASS" : "FAIL") << "\n\n";
         assert(d == input);
     }
@@ -114,7 +114,7 @@ int main()
         const auto c = LZHuffman::compressChunk(input);
         const auto d = LZHuffman::decompressChunk(c);
         std::cout << "  Input: " << input.size() << " bytes, Tokens: " << c.tokenCount << "\n";
-        std::cout << "  Lrl8 overflow: " << c.lrl8Count << "\n";
+        std::cout << "  LenOverflow count: " << c.lenOverflowCount << "\n";
         std::cout << "  Roundtrip: " << (d == input ? "PASS" : "FAIL") << "\n\n";
         assert(d == input);
     }
@@ -151,8 +151,8 @@ int main()
         const auto d = LZHuffman::decompressChunk(c);
 
         size_t totalCompressed = c.tokenStream.size() + c.literalStream.size() +
-            c.distPackedStream.size() + c.lrl8Stream.size() +
-            c.extraBitsStream.size() + c.lrl8ExtraStream.size();
+            c.distPackedStream.size() + c.lenOverflowStream.size() +
+            c.extraBitsStream.size() + c.lenOverflowExtraStream.size();
         double ratio = static_cast<double>(input.size()) / static_cast<double>(totalCompressed);
 
         std::cout << "  Input: " << input.size() << " bytes\n";
@@ -195,8 +195,8 @@ int main()
         const auto d = LZHuffman::decompressChunk(c);
 
         size_t totalCompressed = c.tokenStream.size() + c.literalStream.size() +
-            c.distPackedStream.size() + c.lrl8Stream.size() +
-            c.extraBitsStream.size() + c.lrl8ExtraStream.size();
+            c.distPackedStream.size() + c.lenOverflowStream.size() +
+            c.extraBitsStream.size() + c.lenOverflowExtraStream.size();
         double ratio = static_cast<double>(input.size()) / static_cast<double>(totalCompressed);
 
         std::cout << "  Input: " << input.size() << " bytes\n";

@@ -1,25 +1,119 @@
-﻿# Data Compression - LZ + Huffman Token-Based Codec
+﻿# Data Compression — LZ + Huffman Token-Based Codec
 
-A C++ implementation of LZ compression combined with Huffman entropy coding. Uses token-based encoding with per-stream Huffman tables, log2-class distance/length encoding, and a 3-slot recent-offsets cache. Chunk-based processing enables parallel decompression.
+A C++ implementation of an LZ + Huffman token-based codec.
+Uses packed offset encoding, per-stream entropy tables, literal subtraction, an optional
+RLE pre-pass, and a bidirectional extra-bits stream. Chunk-based processing enables
+parallel compression and decompression.
 
 ## Architecture
 
-The codec processes data in 128 KiB independent chunks. Each chunk is compressed through a multi-stage pipeline:
+Data is processed in independent 128 KiB chunks through a multi-stage pipeline:
 
-1. **LZ Match Finding** - Hash-chain match search with 3-slot recent-offsets cache
-2. **Token Packing** - Literal runs and matches encoded as token bytes (litlen + matchlen + offset mode)
-3. **Stream Separation** - Token, literal, packed-distance, overflow, and extra-bits streams
-4. **Per-Stream Huffman** - Each stream gets independent entropy tables with raw fallback
-5. **Wire Serialization** - LZH4 format with sparse/dense code-length headers
+1. **LZ Match Finding** — Hash-chain search with 3-slot MRU recent-offsets cache
+2. **Tokenization** — Literal runs and matches packed into token bytes
+3. **Stream Separation** — Six independent byte streams per chunk
+4. **Entropy Selection** — Each stream independently tries Raw / Huffman / RLE+Huffman
+5. **Wire Serialization** — `LZH8` format with sparse or dense code-length headers
 
-Token byte layout:
+### Token Byte Layout
+
 ```
-Bits 0-1: literal run length (0-2 inline; 3 = escape to lrl8 stream)
-Bits 2-5: match length field (0-14 = length 3-17; 15 = escape to lrl8 stream)
-Bits 6-7: offset mode (0 = new distance; 1/2/3 = recent offset 0/1/2)
+Bits 0-1: litlen       (0-2 inline literals; 3 = escape to lenOverflow stream)
+Bits 2-5: matchlen     (0-14 = matchlen 3-17; 15 = escape to lenOverflow stream)
+Bits 6-7: offset mode  (0 = new distance; 1/2/3 = recent-offset slot 0/1/2)
 ```
 
-Distances use packed offset encoding: one entropy-coded byte absorbs the log2 class and 4 bits of mantissa. Extra bits for distances/lengths are stored in a separate raw bitstream, bypassing Huffman. Overflow values (litlen >= 3, matchlen >= 18) are encoded in a shared lrl8 byte stream, with escape values 255 signaling LE32 overflow into a separate stream.
+### Offset Encoding
+
+Each distance is packed into a single entropy-coded byte that absorbs the log2 class
+and 4 mantissa bits, minimising the raw extra-bits residual:
+
+```
+n = BSR(distance)                        // position of highest set bit
+if n < 4:  packed = distance - 1        // values 0-14, zero extra bits
+else:      packed = ((n-3) << 4) | ((distance >> (n-4)) & 0x0F)
+           extra bits = (n-4) raw bits of (distance & mask)
+```
+
+Extra bits are stored in a **bidirectional** raw bitstream: even-indexed offsets are
+written forward and odd-indexed offsets are written backward into the same buffer,
+giving the decoder two independent dependency chains.
+
+### Length Overflow Stream
+
+Both litlen ≥ 3 and matchlen ≥ 18 overflow into a **single shared byte stream**.
+Values 0–254 are stored directly (1 byte). Value 255 is an escape that signals a
+full LE32 value in a separate `lenOverflowExtra` stream.
+
+### Literal Encoding
+
+Per chunk, the encoder builds both a raw literal array and a delta-coded array
+(`literal − output[pos − lastOffset]`). It selects whichever has lower Shannon
+entropy. The chosen mode is stored in the per-chunk flags byte.
+
+### Entropy Pipeline (per stream)
+
+Each of the four entropy-coded streams independently tries:
+1. **Raw** — memcpy, used when all other modes expand
+2. **Huffman** — canonical Huffman with two-level decode table
+3. **RLE + Huffman** — RLE pre-pass (runs of 3+ bytes with `0xFF` escape protocol),
+   followed by Huffman on the compressed control stream
+
+The smallest output wins. Stream type is stored in the wire header.
+
+---
+
+## Wire Format — `LZH8`
+
+### File Header (12 bytes)
+```
+[4]  Magic          "LZH8"
+[4]  TotalSize      LE32 — original uncompressed size
+[4]  ChunkCount     LE32 — number of chunks
+```
+
+### Per-Chunk Header (29 bytes fixed + variable streams)
+```
+[4]  UncompressedSize      LE32
+[4]  TokenCount            LE32
+[4]  LiteralByteCount      LE32
+[4]  DistPackedCount       LE32
+[4]  LenOverflowCount      LE32
+[4]  ExtraBitCount         LE32
+[4]  LenOverflowExtraCount LE32
+[1]  Flags                 bit 0 = literalSubMode
+```
+
+Followed by four **entropy-coded streams** (token, literal, distPacked, lenOverflow), each
+with a stream header:
+```
+[1]  TypeAndFlags   bits 0-3 = StreamType (0=Raw, 1=Huffman, 2=RLEHuffman)
+                    bit  7   = interleaved flag (reserved)
+--- if Huffman or RLEHuffman: ---
+[1]  CodeLengthMode  0 = dense (256 bytes follow), 1 = sparse
+--- sparse: ---
+[1]  SymbolCount-1
+[N*2] (symbol, codeLength) pairs
+--- if RLEHuffman: ---
+[4]  RleEncodedSize  LE32
+--- always: ---
+[4]  StreamSize      LE32
+[N]  StreamBytes
+```
+
+Followed by two **raw streams**:
+```
+ExtraBits stream:
+[4]  PackedSize      LE32 — top 2 bits = extraBitsMode (0=empty, 1=fwd-only, 2=bidirectional)
+                            low 30 bits = byte count
+[N]  Bytes           — bidirectional layout: [fwdBytes][bwdBytes]
+
+LenOverflowExtra stream:
+[4]  StreamSize      LE32
+[N]  Bytes           — LE32 escape values for lenOverflow overflow
+```
+
+---
 
 ## Files
 
@@ -27,86 +121,72 @@ Distances use packed offset encoding: one entropy-coded byte absorbs the log2 cl
 | File | Purpose |
 |------|---------|
 | `huffman.h/cpp` | Huffman codec: frequency analysis, canonical codes, two-level decode tables |
-| `lz.h/cpp` | LZ encoder with hash-chain match finding and 3-slot recent-offsets cache |
-| `lz_huffman.h/cpp` | Token-based stream separation, per-stream Huffman, log2-class encoding |
-| `bitstream.h/cpp` | Bit-level reading/writing primitives |
-| `compressor.h/cpp` | High-level block compression API (LZH4 wire format) |
+| `lz.h/cpp` | LZ encoder: hash-chain match finding, 3-slot recent-offsets cache |
+| `lz_huffman.h/cpp` | Tokenization, stream separation, entropy selection, packed offset encoding |
+| `bitstream.h` | Bit-level I/O: forward/reverse/bidirectional bit readers and writers |
+| `compressor.h/cpp` | High-level block API: `LZH8` wire format serialization |
+| `diag_overhead.cpp` | Diagnostic tool: per-stream size breakdown on synthetic inputs |
 
 ### Test Suite
 | File | Purpose |
 |------|---------|
-| `tests/test_benchmark.cpp` | Performance benchmarking across data patterns and sizes |
-| `tests/test_block_compressor.cpp` | Block compression API roundtrip tests |
-| `tests/test_lz_huffman_multistream.cpp` | Token-based multi-stream tests (overflow, recent offsets, edge cases) |
-| `tests/test_lz_huffman_layers.cpp` | LZ and Huffman as separate layers |
+| `tests/test_benchmark.cpp` | Performance benchmarks across data patterns and sizes |
+| `tests/test_block_compressor.cpp` | Block API roundtrip tests |
+| `tests/test_lz_huffman_multistream.cpp` | Multi-stream edge cases (overflow, recent offsets) |
+| `tests/test_lz_huffman_layers.cpp` | LZ and Huffman as independent layers |
 | `tests/test_lz.cpp` | LZ-only encoding validation |
-| `tests/test_huffman_metrics.cpp` | Huffman entropy analysis and metrics across data patterns |
-| `tests/test_huffman_edge_cases.cpp` | Huffman edge cases (single byte, uniform, alternating, sequential) |
-| `tests/test_huffman_parallel.cpp` | Huffman parallel frequency counting |
+| `tests/test_huffman_metrics.cpp` | Huffman entropy analysis across data patterns |
+| `tests/test_huffman_edge_cases.cpp` | Edge cases: single byte, uniform, alternating, sequential |
+| `tests/test_huffman_parallel.cpp` | Parallel frequency counting |
+
+---
 
 ## Build & Run
 
-Prerequisites: CMake 3.15+, C++23 compiler (MSVC, GCC, Clang)
+**Prerequisites:** CMake 3.15+, C++23 compiler (MSVC, GCC, Clang)
 
 ```bash
-cd DataCompression
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 
 # Run main demo
-./Release/DataCompression.exe
+./build/Release/DataCompression.exe
 
-# Run benchmark suite
-./Release/TestBenchmark.exe
+# Run full benchmark suite
+./build/Release/TestBenchmark.exe
 ```
+
+---
 
 ## Benchmark Results (Release Build)
 
-```
-=== LZ+Huffman Multi-Stream Benchmark ===
+Results from `benchmark_results/current.csv` — 40 test cases across 8 data patterns.
 
-Data Type                         Uncompressed    Compressed     Ratio      Enc ms      Dec ms    Enc MB/s    Dec MB/s  OK
-------------------------------------------------------------------------------------------------------------------------------------------------
-Repeating text 32 KiB                 32.0 KiB         156 B    210.05:1        0.18        0.06       172.7       515.7  PASS
-Repeating text 128 KiB               128.0 KiB         173 B    757.64:1        2.33        0.22        53.7       572.6  PASS
-Repeating text 1 MiB                   1.0 MiB       1.3 KiB    806.60:1       19.08        1.42        52.4       703.6  PASS
-Repeating text 4 MiB                   4.0 MiB       5.0 KiB    812.22:1       77.63        5.99        51.5       668.1  PASS
-Repeating text 16 MiB                 16.0 MiB      20.1 KiB    813.64:1      316.44       24.05        50.6       665.3  PASS
-Skewed (90% one byte) 32 KiB          32.0 KiB       8.0 KiB      4.02:1        1.08        0.16        28.9       195.8  PASS
-Skewed (90% one byte) 128 KiB        128.0 KiB      29.9 KiB      4.28:1        4.38        0.54        28.5       232.8  PASS
-Skewed (90% one byte) 1 MiB            1.0 MiB     237.0 KiB      4.32:1       34.42        4.16        29.1       240.2  PASS
-Skewed (90% one byte) 4 MiB            4.0 MiB     946.3 KiB      4.33:1      142.59       15.51        28.1       257.8  PASS
-Skewed (90% one byte) 16 MiB          16.0 MiB       3.7 MiB      4.33:1      572.83       66.97        27.9       238.9  PASS
-Binary pattern 32 KiB                 32.0 KiB       4.7 KiB      6.75:1        0.57        0.10        54.8       327.9  PASS
-Binary pattern 128 KiB               128.0 KiB      15.0 KiB      8.53:1        2.63        0.29        47.5       424.0  PASS
-Binary pattern 1 MiB                   1.0 MiB     121.0 KiB      8.46:1       21.93        2.74        45.6       364.4  PASS
-Binary pattern 4 MiB                   4.0 MiB     484.7 KiB      8.45:1       88.42       11.78        45.2       339.5  PASS
-Binary pattern 16 MiB                 16.0 MiB       1.9 MiB      8.45:1      365.23       46.08        43.8       347.2  PASS
-Random (incompressible) 32 KiB        32.0 KiB      32.1 KiB      1.00:1        0.63        0.04        49.4       870.5  PASS
-Random (incompressible) 128 KiB      128.0 KiB     128.1 KiB      1.00:1        4.35        0.15        28.7       835.6  PASS
-Random (incompressible) 1 MiB          1.0 MiB       1.0 MiB      1.00:1       35.33        1.43        28.3       700.8  PASS
-Random (incompressible) 4 MiB          4.0 MiB       4.0 MiB      1.00:1      144.15        5.84        27.7       685.3  PASS
-Random (incompressible) 16 MiB        16.0 MiB      16.0 MiB      1.00:1      590.02       24.98        27.1       640.4  PASS
+| Data Type | Size | Compressed | Ratio | Enc MB/s | Dec MB/s |
+|-----------|------|-----------|-------|----------|----------|
+| Repeating text | 32 KiB – 16 MiB | 176 B – 21 KiB | **186–771:1** | 224–630 | 530–679 |
+| Skewed (90% one byte) | 32 KiB – 16 MiB | 8.2 – 3795 KiB | **3.9–4.3:1** | 38–42 | 153–193 |
+| Binary pattern | 32 KiB – 16 MiB | 4.3 – 1924 KiB | **7.5–8.6:1** | 70–81 | 262–303 |
+| Random (incompressible) | 32 KiB – 16 MiB | ≈ input | **1.00:1** | 22–37 | 381–391 |
+| Log text | 32 KiB – 16 MiB | 6.4 – 2912 KiB | **5.0–5.6:1** | 68–73 | 212–259 |
+| JSON-like records | 32 KiB – 16 MiB | 4.7 – 2100 KiB | **6.8–7.8:1** | 75–81 | 265–309 |
+| Simulated x86 binary | 32 KiB – 16 MiB | 16.7 – 7987 KiB | **1.9–2.1:1** | 30–32 | 97–110 |
+| Sorted integers | 32 KiB – 16 MiB | 6.5 – 3225 KiB | **4.9–5.1:1** | 34–51 | 158–170 |
 
-=== All benchmarks passed! ===
-```
+All 40 benchmarks pass roundtrip verification.
 
-### Performance Summary
+### Key Observations
 
-| Data Type | Ratio | Encode MB/s | Decode MB/s |
-|-----------|-------|-------------|-------------|
-| Repeating text | 210-814:1 | 51-173 | 516-704 |
-| Skewed (90% one byte) | 4.0-4.3:1 | 28-29 | 196-258 |
-| Binary pattern | 6.8-8.5:1 | 44-55 | 328-424 |
-| Random (incompressible) | 1.00:1 | 27-49 | 640-871 |
+- **Random data** achieves exactly 1.00:1 (no expansion) via raw-stream fallback; decodes
+  at ~385 MB/s by skipping Huffman entirely
+- **Repeating text** achieves 186–771:1 due to RLE pre-pass on all streams, not just literals
+- **Literal subtraction** is the primary driver for sorted integers (5:1 vs ~3:1 without it)
+- **Packed offset encoding** eliminates most raw extra-bit overhead; 4 mantissa bits per
+  offset move into the entropy-coded distPacked stream
+- Decompression is consistently **3–10× faster** than compression
 
-Key observations:
-- Random data achieves 1.00:1 ratio (no expansion) with raw-stream fallback
-- Random data decodes at 640-870 MB/s by skipping Huffman entirely
-- Decompression is consistently 3-10x faster than compression
-- Per-stream tables and log2-class encoding improve ratio on match-heavy data
+---
 
 ## License
 
-(See LICENSE file)
+See [LICENSE](LICENSE).
